@@ -78,11 +78,41 @@ type DraftSnapshot = {
   posts: WorkspaceState["drafts"][number]["posts"];
   selectedPostId: string;
 };
+type TenorMediaVariant = {
+  url?: string;
+  preview?: string;
+  dims?: number[];
+};
+type TenorGifApiItem = {
+  id: string;
+  title?: string;
+  content_description?: string;
+  media?: Array<{
+    gif?: TenorMediaVariant;
+    tinygif?: TenorMediaVariant;
+    mediumgif?: TenorMediaVariant;
+    nanogif?: TenorMediaVariant;
+  }>;
+};
+type TenorGifApiResponse = {
+  results?: TenorGifApiItem[];
+  next?: string | number;
+};
+type TenorGifTile = {
+  id: string;
+  title: string;
+  gifUrl: string;
+  previewUrl: string;
+  width: number;
+  height: number;
+};
 
 const ONBOARDING_SEEN_KEY = "hanfully_v2_onboarding_seen";
 const THEME_STORAGE_KEY = "hanfully_v2_theme";
 const DRAFT_HISTORY_STORAGE_KEY = "hanfully_v2_draft_history";
 const LOCALE_STORAGE_KEY = "hanfully_v2_locale";
+const TENOR_DEFAULT_KEY = "LIVDSRZULELA";
+const TENOR_PAGE_SIZE = 24;
 const THEME_OPTIONS: Array<{ id: UiTheme; label: string }> = [
   { id: "signature", label: "Signature" },
   { id: "ink", label: "Ink" },
@@ -269,8 +299,51 @@ function themeLabel(theme: UiTheme, locale: UiLocale): string {
   return "Sunset";
 }
 
-function isHttpUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value.trim());
+function normalizeTenorDims(value?: number[]): [number, number] | null {
+  if (!value || value.length < 2) {
+    return null;
+  }
+  const width = Number(value[0]);
+  const height = Number(value[1]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return [width, height];
+}
+
+function mapTenorResults(items: TenorGifApiItem[]): TenorGifTile[] {
+  return items
+    .map((item) => {
+      const media = item.media?.[0];
+      const animated = media?.gif ?? media?.tinygif ?? media?.mediumgif ?? media?.nanogif;
+      if (!animated?.url) {
+        return null;
+      }
+      const previewUrl = media?.tinygif?.url ?? animated.preview ?? animated.url;
+      const dims = normalizeTenorDims(animated.dims) ?? normalizeTenorDims(media?.tinygif?.dims) ?? [320, 320];
+      return {
+        id: item.id,
+        title: (item.title || item.content_description || "Tenor GIF").trim(),
+        gifUrl: animated.url,
+        previewUrl,
+        width: dims[0],
+        height: dims[1]
+      };
+    })
+    .filter((item): item is TenorGifTile => item !== null);
+}
+
+function mergeTenorResults(prev: TenorGifTile[], next: TenorGifTile[]): TenorGifTile[] {
+  const seen = new Set(prev.map((item) => item.id));
+  const merged = [...prev];
+  next.forEach((item) => {
+    if (seen.has(item.id)) {
+      return;
+    }
+    seen.add(item.id);
+    merged.push(item);
+  });
+  return merged;
 }
 
 export function ComposeWorkbench() {
@@ -293,6 +366,13 @@ export function ComposeWorkbench() {
   const [templateLibraryOpen, setTemplateLibraryOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [gifPickerOpen, setGifPickerOpen] = useState(false);
+  const [gifPickerPostId, setGifPickerPostId] = useState<string | null>(null);
+  const [gifQuery, setGifQuery] = useState("");
+  const [gifResults, setGifResults] = useState<TenorGifTile[]>([]);
+  const [gifNextPos, setGifNextPos] = useState<string | null>(null);
+  const [gifLoading, setGifLoading] = useState(false);
+  const [gifError, setGifError] = useState("");
   const [previewMobile, setPreviewMobile] = useState(false);
   const [draftHistory, setDraftHistory] = useState<Record<string, DraftSnapshot[]>>({});
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -313,8 +393,11 @@ export function ComposeWorkbench() {
   const templateRef = useRef<HTMLDivElement | null>(null);
   const historyRef = useRef<HTMLDivElement | null>(null);
   const shortcutRef = useRef<HTMLDivElement | null>(null);
+  const gifSearchRef = useRef<HTMLInputElement | null>(null);
+  const gifRequestRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const t = (en: string, zh: string) => (locale === "zh" ? zh : en);
+  const tenorApiKey = (process.env.NEXT_PUBLIC_TENOR_API_KEY ?? TENOR_DEFAULT_KEY).trim() || TENOR_DEFAULT_KEY;
 
   useEffect(() => {
     const saved = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
@@ -455,6 +538,29 @@ export function ComposeWorkbench() {
   }, [commandOpen]);
 
   useEffect(() => {
+    if (!gifPickerOpen) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      gifSearchRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [gifPickerOpen]);
+
+  useEffect(() => {
+    if (!gifPickerOpen) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void fetchTenorGifs({
+        query: gifQuery,
+        append: false
+      });
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [gifPickerOpen, gifQuery, locale]);
+
+  useEffect(() => {
     function onGlobalClick(event: MouseEvent) {
       if (!(event.target instanceof HTMLElement)) {
         return;
@@ -483,6 +589,7 @@ export function ComposeWorkbench() {
       setTemplateLibraryOpen(false);
       setHistoryOpen(false);
       setShortcutsOpen(false);
+      closeGifPicker();
       setSelectionToolbar((prev) => ({ ...prev, visible: false, postId: null }));
     }
     window.addEventListener("keydown", onEscape);
@@ -1213,15 +1320,82 @@ export function ComposeWorkbench() {
     fileInputRef.current?.click();
   }
 
-  function addGifToPost(postId: string) {
-    const gifName = window.prompt(
-      t("Enter GIF keyword or URL", "输入 GIF 关键词或链接"),
-      t("reaction gif", "reaction gif")
-    );
-    if (!gifName) {
-      return;
+  function closeGifPicker() {
+    gifRequestRef.current += 1;
+    setGifPickerOpen(false);
+    setGifPickerPostId(null);
+    setGifQuery("");
+    setGifResults([]);
+    setGifNextPos(null);
+    setGifError("");
+    setGifLoading(false);
+  }
+
+  function openGifPicker(postId: string) {
+    setMediaMenuPostId(null);
+    setAiMenuPostId(null);
+    setMoreMenuPostId(null);
+    setGifPickerPostId(postId);
+    setGifPickerOpen(true);
+    setGifQuery("");
+    setGifResults([]);
+    setGifNextPos(null);
+    setGifError("");
+  }
+
+  async function fetchTenorGifs(options: { query: string; append: boolean; pos?: string | null }) {
+    const requestId = ++gifRequestRef.current;
+    const query = options.query.trim();
+    const endpoint = query ? "search" : "trending";
+    const params = new URLSearchParams({
+      key: tenorApiKey,
+      limit: String(TENOR_PAGE_SIZE),
+      media_filter: "minimal",
+      contentfilter: "medium",
+      locale: locale === "zh" ? "zh_CN" : "en_US"
+    });
+    if (query) {
+      params.set("q", query);
     }
-    const trimmedName = gifName.trim();
+    if (options.pos) {
+      params.set("pos", options.pos);
+    }
+
+    setGifLoading(true);
+    setGifError("");
+
+    try {
+      const response = await fetch(`https://g.tenor.com/v1/${endpoint}?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        throw new Error(`Tenor request failed: ${response.status}`);
+      }
+      const payload = (await response.json()) as TenorGifApiResponse;
+      if (requestId !== gifRequestRef.current) {
+        return;
+      }
+      const items = mapTenorResults(payload.results ?? []);
+      setGifResults((prev) => (options.append ? mergeTenorResults(prev, items) : items));
+      setGifNextPos(payload.next !== undefined && payload.next !== null ? String(payload.next) : null);
+    } catch (error) {
+      if (requestId !== gifRequestRef.current) {
+        return;
+      }
+      console.error(error);
+      setGifError(t("Unable to load GIFs. Check network or API key.", "GIF 加载失败，请检查网络或 Tenor Key。"));
+      if (!options.append) {
+        setGifResults([]);
+      }
+    } finally {
+      if (requestId === gifRequestRef.current) {
+        setGifLoading(false);
+      }
+    }
+  }
+
+  function insertGifToPost(postId: string, gif: TenorGifTile) {
     updateCurrentDraft((draft) => ({
       ...draft,
       posts: draft.posts.map((post) =>
@@ -1233,15 +1407,15 @@ export function ComposeWorkbench() {
                 {
                   id: createId(),
                   type: "gif",
-                  name: trimmedName,
-                  url: isHttpUrl(trimmedName) ? trimmedName : undefined
+                  name: gif.title,
+                  url: gif.gifUrl
                 }
               ]
             }
           : post
       )
     }));
-    setMediaMenuPostId(null);
+    closeGifPicker();
     setNotice(t("GIF added.", "已添加 GIF。"));
   }
 
@@ -2830,7 +3004,7 @@ export function ComposeWorkbench() {
                                     {t("Upload images or video", "上传图片或视频")}
                                     <kbd>ctrl shift i</kbd>
                                   </button>
-                                  <button type="button" onClick={() => addGifToPost(post.id)} role="menuitem">
+                                  <button type="button" onClick={() => openGifPicker(post.id)} role="menuitem">
                                     {t("Add GIF", "添加 GIF")}
                                   </button>
                                 </div>
@@ -3594,6 +3768,83 @@ export function ComposeWorkbench() {
                 <span>{t("Open shortcut guide", "打开快捷键说明")}</span>
               </article>
             </div>
+          </section>
+        </div>
+      )}
+
+      {gifPickerOpen && (
+        <div className="tf-modal-backdrop tf-gif-backdrop" onMouseDown={closeGifPicker} role="presentation">
+          <section className="tf-modal-card tf-gif-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="tf-gif-search-row">
+              <label className="tf-gif-search-wrap">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M20 20l-3.6-3.6" />
+                </svg>
+                <input
+                  ref={gifSearchRef}
+                  value={gifQuery}
+                  onChange={(event) => setGifQuery(event.target.value)}
+                  placeholder={t("Search Tenor...", "搜索 Tenor...")}
+                />
+                <span className="tf-gif-powered">tenor</span>
+              </label>
+              <button
+                type="button"
+                className="tf-gif-close"
+                onClick={closeGifPicker}
+                aria-label={t("Close GIF picker", "关闭 GIF 选择器")}
+              >
+                ×
+              </button>
+            </div>
+
+            {gifError && <p className="tf-gif-feedback error">{gifError}</p>}
+            {!gifError && gifLoading && gifResults.length === 0 && (
+              <p className="tf-gif-feedback">{t("Loading GIFs...", "正在加载 GIF...")}</p>
+            )}
+            {!gifError && !gifLoading && gifResults.length === 0 && (
+              <p className="tf-gif-feedback">{t("No GIFs found. Try another keyword.", "没有找到 GIF，换个关键词试试。")}</p>
+            )}
+
+            <div className="tf-gif-grid">
+              {gifResults.map((gif) => (
+                <button
+                  key={gif.id}
+                  type="button"
+                  className="tf-gif-tile"
+                  style={{ aspectRatio: `${gif.width} / ${gif.height}` }}
+                  onClick={() => {
+                    if (!gifPickerPostId) {
+                      return;
+                    }
+                    insertGifToPost(gifPickerPostId, gif);
+                  }}
+                  title={gif.title}
+                >
+                  <img src={gif.previewUrl} alt={gif.title} loading="lazy" />
+                </button>
+              ))}
+            </div>
+
+            <footer className="tf-gif-footer">
+              <span>{t("Powered by Tenor", "由 Tenor 提供")}</span>
+              {gifNextPos && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void fetchTenorGifs({
+                      query: gifQuery,
+                      append: true,
+                      pos: gifNextPos
+                    })
+                  }
+                  disabled={gifLoading}
+                >
+                  {gifLoading ? t("Loading...", "加载中...") : t("Load more", "加载更多")}
+                </button>
+              )}
+            </footer>
           </section>
         </div>
       )}
