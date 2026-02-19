@@ -269,6 +269,10 @@ function themeLabel(theme: UiTheme, locale: UiLocale): string {
   return "Sunset";
 }
 
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
 export function ComposeWorkbench() {
   const [workspace, setWorkspace] = useState<WorkspaceState>(createDefaultWorkspaceState);
   const [paneTab, setPaneTab] = useState<PaneTab>("drafts");
@@ -829,6 +833,12 @@ export function ComposeWorkbench() {
         id: post.id,
         index,
         text,
+        media: (post.media ?? []).map((item) => ({
+          id: item.id,
+          type: item.type,
+          name: item.name,
+          url: item.url
+        })),
         replies: 2 + base,
         reposts: 5 + base * 2,
         likes: 20 + base * 5,
@@ -1211,6 +1221,7 @@ export function ComposeWorkbench() {
     if (!gifName) {
       return;
     }
+    const trimmedName = gifName.trim();
     updateCurrentDraft((draft) => ({
       ...draft,
       posts: draft.posts.map((post) =>
@@ -1222,7 +1233,8 @@ export function ComposeWorkbench() {
                 {
                   id: createId(),
                   type: "gif",
-                  name: gifName.trim()
+                  name: trimmedName,
+                  url: isHttpUrl(trimmedName) ? trimmedName : undefined
                 }
               ]
             }
@@ -1237,8 +1249,19 @@ export function ComposeWorkbench() {
     const files = Array.from(event.target.files ?? []);
     const postId = targetUploadPostId;
     if (!postId || files.length === 0) {
+      event.target.value = "";
       return;
     }
+    const mediaItems = files.map((file) => ({
+      id: createId(),
+      type: file.type.startsWith("video/")
+        ? ("video" as const)
+        : file.type === "image/gif"
+          ? ("gif" as const)
+          : ("image" as const),
+      name: file.name,
+      url: URL.createObjectURL(file)
+    }));
     updateCurrentDraft((draft) => ({
       ...draft,
       posts: draft.posts.map((post) =>
@@ -1247,11 +1270,7 @@ export function ComposeWorkbench() {
               ...post,
               media: [
                 ...(post.media ?? []),
-                ...files.map((file) => ({
-                  id: createId(),
-                  type: file.type.startsWith("video") ? ("video" as const) : ("image" as const),
-                  name: file.name
-                }))
+                ...mediaItems
               ]
             }
           : post
@@ -1268,6 +1287,12 @@ export function ComposeWorkbench() {
   }
 
   function removeMedia(postId: string, mediaId: string) {
+    const targetMedia = currentDraft?.posts
+      .find((post) => post.id === postId)
+      ?.media?.find((media) => media.id === mediaId);
+    if (targetMedia?.url?.startsWith("blob:")) {
+      URL.revokeObjectURL(targetMedia.url);
+    }
     updateCurrentDraft((draft) => ({
       ...draft,
       posts: draft.posts.map((post) =>
@@ -2459,6 +2484,24 @@ export function ComposeWorkbench() {
                               <p key={`${post.id}-${lineIndex}`}>{line || "\u00a0"}</p>
                             ))}
                           </div>
+                          {(post.media?.length ?? 0) > 0 && (
+                            <div className="tf-x-post-media">
+                              {(post.media ?? []).map((media) => (
+                                <div key={media.id} className="tf-x-media-item">
+                                  {media.url && (media.type === "image" || media.type === "gif") ? (
+                                    <img src={media.url} alt={media.name} loading="lazy" />
+                                  ) : media.url && media.type === "video" ? (
+                                    <video src={media.url} controls preload="metadata" />
+                                  ) : (
+                                    <div className="tf-x-media-placeholder">
+                                      <em>{media.type.toUpperCase()}</em>
+                                      <span>{media.name}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                           <div className="tf-x-post-stats">
                             <button type="button" tabIndex={-1}>
                               <svg viewBox="0 0 24 24" aria-hidden>
@@ -2658,21 +2701,32 @@ export function ComposeWorkbench() {
                           {(post.media?.length ?? 0) > 0 && (
                             <div className="tf-media-row">
                               {(post.media ?? []).map((media) => (
-                                <span key={media.id} className="tf-media-chip">
-                                  <em>{media.type.toUpperCase()}</em>
-                                  <strong>{media.name}</strong>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeMedia(post.id, media.id)}
-                                    aria-label={
-                                      locale === "zh"
-                                        ? `移除${media.type === "image" ? "图片" : "视频"} ${media.name}`
-                                        : `Remove ${media.type} ${media.name}`
-                                    }
-                                  >
-                                    x
-                                  </button>
-                                </span>
+                                <article key={media.id} className="tf-media-card">
+                                  <div className="tf-media-preview">
+                                    {media.url && (media.type === "image" || media.type === "gif") ? (
+                                      <img src={media.url} alt={media.name} loading="lazy" />
+                                    ) : media.url && media.type === "video" ? (
+                                      <video src={media.url} controls preload="metadata" />
+                                    ) : (
+                                      <span>{media.type.toUpperCase()}</span>
+                                    )}
+                                  </div>
+                                  <div className="tf-media-card-meta">
+                                    <em>{media.type.toUpperCase()}</em>
+                                    <strong title={media.name}>{media.name}</strong>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeMedia(post.id, media.id)}
+                                      aria-label={
+                                        locale === "zh"
+                                          ? `移除${media.type === "image" ? "图片" : media.type === "gif" ? "GIF" : "视频"} ${media.name}`
+                                          : `Remove ${media.type} ${media.name}`
+                                      }
+                                    >
+                                      x
+                                    </button>
+                                  </div>
+                                </article>
                               ))}
                             </div>
                           )}
@@ -3640,7 +3694,8 @@ function clonePosts(posts: WorkspaceState["drafts"][number]["posts"]) {
     media: (post.media ?? []).map((item) => ({
       id: item.id,
       type: item.type,
-      name: item.name
+      name: item.name,
+      url: item.url
     })),
     poll: post.poll
       ? {

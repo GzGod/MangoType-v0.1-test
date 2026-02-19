@@ -19,6 +19,7 @@ export interface ThreadPost {
     id: string;
     type: "image" | "video" | "gif";
     name: string;
+    url?: string;
   }>;
   poll?: {
     question: string;
@@ -575,8 +576,12 @@ function normalizePosts(posts: ThreadPost[]): ThreadPost[] {
     text: toRichHtml(item.text || ""),
     media: (item.media ?? []).map((media) => ({
       id: media.id || createId(),
-      type: media.type,
-      name: media.name || "media"
+      type:
+        media.type === "video" || media.type === "gif" || media.type === "image"
+          ? media.type
+          : "image",
+      name: media.name || "media",
+      url: typeof media.url === "string" && media.url.trim().length > 0 ? media.url : undefined
     })),
     poll: item.poll
       ? {
