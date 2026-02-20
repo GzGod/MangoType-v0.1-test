@@ -31,6 +31,7 @@ export interface DraftItem {
   id: string;
   kind: DraftKind;
   title: string;
+  topic?: string;
   posts: ThreadPost[];
   selectedPostId: string;
   createdAt: string;
@@ -181,6 +182,7 @@ export function createDraft(
     id: overrides.id ?? createId(),
     kind,
     title: resolveDraftTitle(overrides.title, kind),
+    topic: normalizeDraftTopic(overrides.topic),
     posts,
     selectedPostId,
     createdAt: overrides.createdAt ?? now,
@@ -553,6 +555,7 @@ function normalizeDraft(input: DraftItem): DraftItem {
     ...input,
     kind,
     title: resolveDraftTitle(input.title, kind),
+    topic: normalizeDraftTopic(input.topic),
     posts,
     selectedPostId,
     createdAt: input.createdAt || new Date().toISOString(),
@@ -565,6 +568,14 @@ function resolveDraftTitle(title: unknown, kind: DraftKind): string {
     return defaultDraftTitle(kind);
   }
   return title;
+}
+
+function normalizeDraftTopic(topic: unknown): string | undefined {
+  if (typeof topic !== "string") {
+    return undefined;
+  }
+  const normalized = topic.replace(/\s+/g, " ").trim().slice(0, 28);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizePosts(posts: ThreadPost[]): ThreadPost[] {

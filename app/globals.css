@@ -218,6 +218,7 @@ select:focus-visible,
 
 .tf-app.sidebar-collapsed .tf-tabs,
 .tf-app.sidebar-collapsed .tf-new-draft-wrap,
+.tf-app.sidebar-collapsed .tf-topic-filter-wrap,
 .tf-app.sidebar-collapsed .tf-sidebar-foot {
   max-height: 0;
   opacity: 0;
@@ -602,6 +603,76 @@ select:focus-visible,
   z-index: 38;
 }
 
+.tf-topic-filter-wrap {
+  margin-top: 10px;
+  border: 1px solid #d7e0ec;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.84);
+  padding: 8px;
+}
+
+.tf-topic-filter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.tf-topic-filter-head strong {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: #44566d;
+}
+
+.tf-topic-filter-head button {
+  border: 0;
+  background: transparent;
+  color: #5f7690;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tf-topic-filter-head button:hover {
+  color: #35506f;
+}
+
+.tf-topic-filter-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tf-topic-chip {
+  border: 1px solid #d5deeb;
+  border-radius: 999px;
+  background: #fff;
+  color: #3e5168;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.tf-topic-chip em {
+  font-style: normal;
+  color: #7a8ea6;
+}
+
+.tf-topic-chip:hover {
+  background: #f2f7ff;
+  border-color: #c3d4ea;
+}
+
+.tf-topic-chip.active {
+  background: linear-gradient(180deg, #eaf3ff 0%, #f6fbff 100%);
+  border-color: #b8cce7;
+  color: #20496f;
+}
+
 .tf-draft-picker {
   position: absolute;
   top: calc(100% + 8px);
@@ -708,6 +779,24 @@ select:focus-visible,
   color: #1f2937;
 }
 
+.tf-draft-topic-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d6dfeb;
+  border-radius: 999px;
+  background: #f8fbff;
+  color: #3f5673;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 2px 8px;
+  margin: 0 0 6px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .tf-draft-title-row {
   display: flex;
   align-items: center;
@@ -800,6 +889,16 @@ select:focus-visible,
 .tf-draft-meta-stack {
   align-items: flex-start;
   justify-content: flex-start;
+}
+
+.tf-empty-topic-state {
+  border: 1px dashed #d3deeb;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #5d7088;
+  font-size: 12px;
+  text-align: center;
+  padding: 12px;
 }
 
 .tf-draft-actions {
@@ -1871,17 +1970,78 @@ select:focus-visible,
   margin-bottom: 4px;
 }
 
-.tf-draft-header input {
+.tf-draft-header-fields {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.tf-draft-title-input,
+.tf-draft-topic-input {
   border: 1px solid #d0d9e8;
   border-radius: 12px;
   background: #fff;
   color: #0f172a;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
-  padding: 10px 14px;
-  width: min(520px, 100%);
+  padding: 9px 12px;
   box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
   letter-spacing: 0.01em;
+}
+
+.tf-draft-title-input {
+  width: min(520px, 100%);
+  flex: 1;
+}
+
+.tf-draft-topic-input {
+  width: min(220px, 38%);
+  min-width: 130px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.tf-draft-title-input:focus-visible,
+.tf-draft-topic-input:focus-visible {
+  outline: none;
+  border-color: #b8cce6;
+  box-shadow:
+    0 0 0 2px rgba(56, 132, 220, 0.14),
+    0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.tf-save-indicator {
+  margin-left: auto;
+  border: 1px solid #d4deec;
+  border-radius: 999px;
+  background: #f7faff;
+  color: #566c86;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tf-save-indicator em {
+  font-style: normal;
+  color: #7388a1;
+  font-weight: 500;
+}
+
+.tf-save-indicator.is-saving {
+  border-color: #c9daef;
+  background: #eef6ff;
+  color: #315f90;
+}
+
+.tf-save-indicator.is-failed {
+  border-color: #efc9ce;
+  background: #fff2f4;
+  color: #b33f4f;
 }
 
 .tf-post-row {
@@ -3305,6 +3465,26 @@ select:focus-visible,
   .tf-template-grid,
   .tf-shortcut-grid {
     grid-template-columns: 1fr;
+  }
+
+  .tf-draft-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tf-draft-header-fields {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .tf-draft-topic-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .tf-save-indicator {
+    margin-left: 0;
   }
 
   .tf-gif-grid {

@@ -52,6 +52,7 @@ type PublishState =
   | "published";
 type UiTheme = "signature" | "ink" | "sunset";
 type UiLocale = "en" | "zh";
+type WorkspaceSaveState = "saving" | "saved" | "failed";
 type QuickCommand = {
   id: string;
   label: string;
@@ -75,6 +76,7 @@ type DraftSnapshot = {
   signature: string;
   kind: DraftKind;
   title: string;
+  topic?: string;
   posts: WorkspaceState["drafts"][number]["posts"];
   selectedPostId: string;
 };
@@ -113,6 +115,8 @@ const DRAFT_HISTORY_STORAGE_KEY = "hanfully_v2_draft_history";
 const LOCALE_STORAGE_KEY = "hanfully_v2_locale";
 const TENOR_DEFAULT_KEY = "LIVDSRZULELA";
 const TENOR_PAGE_SIZE = 24;
+const TOPIC_FILTER_ALL = "__all_topics__";
+const TOPIC_FILTER_UNTAGGED = "__untagged__";
 const THEME_OPTIONS: Array<{ id: UiTheme; label: string }> = [
   { id: "signature", label: "Signature" },
   { id: "ink", label: "Ink" },
@@ -346,6 +350,13 @@ function mergeTenorResults(prev: TenorGifTile[], next: TenorGifTile[]): TenorGif
   return merged;
 }
 
+function normalizeTopicLabel(value: string | undefined): string {
+  if (!value) {
+    return "";
+  }
+  return value.replace(/\s+/g, " ").trim().slice(0, 28);
+}
+
 export function ComposeWorkbench() {
   const [workspace, setWorkspace] = useState<WorkspaceState>(createDefaultWorkspaceState);
   const [paneTab, setPaneTab] = useState<PaneTab>("drafts");
@@ -360,6 +371,9 @@ export function ComposeWorkbench() {
   const [publishState, setPublishState] = useState<PublishState>("idle");
   const [theme, setTheme] = useState<UiTheme>("signature");
   const [locale, setLocale] = useState<UiLocale>("en");
+  const [workspaceSaveState, setWorkspaceSaveState] = useState<WorkspaceSaveState>("saved");
+  const [workspaceLastSavedAt, setWorkspaceLastSavedAt] = useState<string | null>(null);
+  const [topicFilter, setTopicFilter] = useState<string>(TOPIC_FILTER_ALL);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
@@ -443,7 +457,17 @@ export function ComposeWorkbench() {
     if (!hydrated) {
       return;
     }
-    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));
+    setWorkspaceSaveState("saving");
+    const timer = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));
+        setWorkspaceSaveState("saved");
+        setWorkspaceLastSavedAt(new Date().toISOString());
+      } catch {
+        setWorkspaceSaveState("failed");
+      }
+    }, 360);
+    return () => window.clearTimeout(timer);
   }, [hydrated, workspace]);
 
   useEffect(() => {
@@ -909,6 +933,7 @@ export function ComposeWorkbench() {
         id: draft.id,
         kind: draft.kind,
         title: draft.title,
+        topic: normalizeTopicLabel(draft.topic),
         preview: firstPreview.slice(0, 70),
         postCount: draft.posts.length,
         issueCount,
@@ -924,6 +949,73 @@ export function ComposeWorkbench() {
     () => (currentDraft ? serializeDraftSignature(currentDraft) : ""),
     [currentDraft]
   );
+
+  const topicFilterOptions = useMemo(() => {
+    const grouped = new Map<string, number>();
+    let untaggedCount = 0;
+    draftItems.forEach((item) => {
+      if (!item.topic) {
+        untaggedCount += 1;
+        return;
+      }
+      grouped.set(item.topic, (grouped.get(item.topic) ?? 0) + 1);
+    });
+    const sortedTopics = Array.from(grouped.entries()).sort((a, b) => {
+      if (b[1] !== a[1]) {
+        return b[1] - a[1];
+      }
+      return a[0].localeCompare(b[0], locale === "zh" ? "zh-Hans" : "en");
+    });
+    const options: Array<{ value: string; label: string; count: number }> = [
+      {
+        value: TOPIC_FILTER_ALL,
+        label: locale === "zh" ? "全部话题" : "All topics",
+        count: draftItems.length
+      },
+      ...sortedTopics.map(([topic, count]) => ({
+        value: topic,
+        label: topic,
+        count
+      }))
+    ];
+    if (untaggedCount > 0) {
+      options.push({
+        value: TOPIC_FILTER_UNTAGGED,
+        label: locale === "zh" ? "未分组" : "Untagged",
+        count: untaggedCount
+      });
+    }
+    return options;
+  }, [draftItems, locale]);
+
+  const visibleDraftItems = useMemo(() => {
+    if (topicFilter === TOPIC_FILTER_ALL) {
+      return draftItems;
+    }
+    if (topicFilter === TOPIC_FILTER_UNTAGGED) {
+      return draftItems.filter((item) => !item.topic);
+    }
+    return draftItems.filter((item) => item.topic === topicFilter);
+  }, [draftItems, topicFilter]);
+
+  const saveIndicator = useMemo(() => {
+    if (workspaceSaveState === "saving") {
+      return {
+        label: t("Saving...", "保存中..."),
+        detail: ""
+      };
+    }
+    if (workspaceSaveState === "failed") {
+      return {
+        label: t("Save failed", "保存失败"),
+        detail: ""
+      };
+    }
+    return {
+      label: t("Saved", "已保存"),
+      detail: workspaceLastSavedAt ? formatSavedClock(workspaceLastSavedAt, locale) : ""
+    };
+  }, [locale, t, workspaceLastSavedAt, workspaceSaveState]);
 
   const currentDraftHistory = currentDraft ? draftHistory[currentDraft.id] ?? [] : [];
 
@@ -954,6 +1046,20 @@ export function ComposeWorkbench() {
     });
   }, [currentDraft, locale, tweetOutputByPost]);
 
+  useEffect(() => {
+    if (paneTab !== "drafts" && topicFilter !== TOPIC_FILTER_ALL) {
+      setTopicFilter(TOPIC_FILTER_ALL);
+      return;
+    }
+    if (topicFilter === TOPIC_FILTER_ALL) {
+      return;
+    }
+    const validFilters = new Set(topicFilterOptions.map((item) => item.value));
+    if (!validFilters.has(topicFilter)) {
+      setTopicFilter(TOPIC_FILTER_ALL);
+    }
+  }, [paneTab, topicFilter, topicFilterOptions]);
+
   function addDraftSnapshot(
     draft: WorkspaceState["drafts"][number],
     label: string,
@@ -969,6 +1075,7 @@ export function ComposeWorkbench() {
       signature,
       kind: draft.kind,
       title: draft.title,
+      topic: draft.topic,
       posts: clonePosts(draft.posts),
       selectedPostId
     };
@@ -1040,6 +1147,7 @@ export function ComposeWorkbench() {
           ...draft,
           kind: target.kind,
           title: target.title,
+          topic: target.topic,
           posts: clonePosts(target.posts),
           selectedPostId: target.selectedPostId,
           updatedAt: new Date().toISOString()
@@ -1153,7 +1261,11 @@ export function ComposeWorkbench() {
   }
 
   function createNewDraft(kind: DraftKind) {
-    const fresh = createDraft(kind);
+    const seedTopic =
+      topicFilter !== TOPIC_FILTER_ALL && topicFilter !== TOPIC_FILTER_UNTAGGED
+        ? normalizeTopicLabel(topicFilter)
+        : undefined;
+    const fresh = createDraft(kind, { topic: seedTopic });
     updateWorkspace((prev) => ({
       ...prev,
       drafts: [fresh, ...prev.drafts],
@@ -1199,6 +1311,14 @@ export function ComposeWorkbench() {
     updateCurrentDraft((draft) => ({
       ...draft,
       title: nextTitle
+    }));
+  }
+
+  function updateDraftTopic(nextTopic: string, commit = false) {
+    const topic = commit ? normalizeTopicLabel(nextTopic) : nextTopic.slice(0, 28);
+    updateCurrentDraft((draft) => ({
+      ...draft,
+      topic: topic.length > 0 ? topic : undefined
     }));
   }
 
@@ -2317,10 +2437,37 @@ export function ComposeWorkbench() {
               </div>
             )}
           </div>
+
+          {paneTab === "drafts" && (
+            <section className="tf-topic-filter-wrap" aria-label={t("Topic groups", "话题分组")}>
+              <div className="tf-topic-filter-head">
+                <strong>{t("Topics", "话题")}</strong>
+                {topicFilter !== TOPIC_FILTER_ALL && (
+                  <button type="button" onClick={() => setTopicFilter(TOPIC_FILTER_ALL)}>
+                    {t("Show all", "查看全部")}
+                  </button>
+                )}
+              </div>
+              <div className="tf-topic-filter-list">
+                {topicFilterOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={clsx("tf-topic-chip", topicFilter === option.value && "active")}
+                    onClick={() => setTopicFilter(option.value)}
+                    aria-pressed={topicFilter === option.value}
+                  >
+                    <span>{option.label}</span>
+                    <em>{option.count}</em>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
         <div className="tf-side-list">
           {paneTab === "drafts" &&
-            draftItems.map((item) => (
+            visibleDraftItems.map((item) => (
               <article
                 key={item.id}
                 className={clsx(
@@ -2340,6 +2487,7 @@ export function ComposeWorkbench() {
                     {draftKindLabel(item.kind, locale)}
                   </span>
                 </div>
+                {item.topic && <div className="tf-draft-topic-pill">{item.topic}</div>}
                 <p>{item.preview}</p>
                 <div className="tf-draft-progress">
                   <div
@@ -2370,6 +2518,11 @@ export function ComposeWorkbench() {
                 </div>
               </article>
             ))}
+          {paneTab === "drafts" && visibleDraftItems.length === 0 && (
+            <div className="tf-empty-topic-state">
+              {t("No drafts under this topic yet.", "当前话题下还没有草稿。")}
+            </div>
+          )}
 
           {paneTab === "scheduled" &&
             workspace.queue.map((item) => (
@@ -2791,12 +2944,23 @@ export function ComposeWorkbench() {
                   </section>
                 )}
                 <div className="tf-draft-header">
-                  <input
-                    value={currentDraft.title}
-                    onChange={(event) => updateDraftTitle(event.target.value)}
-                    placeholder={t("Draft title", "草稿标题")}
-                    aria-label={t("Draft title", "草稿标题")}
-                  />
+                  <div className="tf-draft-header-fields">
+                    <input
+                      className="tf-draft-title-input"
+                      value={currentDraft.title}
+                      onChange={(event) => updateDraftTitle(event.target.value)}
+                      placeholder={t("Draft title", "草稿标题")}
+                      aria-label={t("Draft title", "草稿标题")}
+                    />
+                    <input
+                      className="tf-draft-topic-input"
+                      value={currentDraft.topic ?? ""}
+                      onChange={(event) => updateDraftTopic(event.target.value)}
+                      onBlur={(event) => updateDraftTopic(event.target.value, true)}
+                      placeholder={t("Topic / Group", "话题 / 分组")}
+                      aria-label={t("Draft topic group", "草稿话题分组")}
+                    />
+                  </div>
                   <span className={clsx("tf-kind-badge", `tf-kind-${currentDraft.kind}`)}>
                     {draftKindLabel(currentDraft.kind, locale)}
                   </span>
@@ -2838,6 +3002,10 @@ export function ComposeWorkbench() {
                   <button type="button" onClick={() => setShortcutsOpen(true)}>
                     {t("Shortcuts", "快捷键")}
                   </button>
+                  <div className={clsx("tf-save-indicator", `is-${workspaceSaveState}`)} aria-live="polite">
+                    <span>{saveIndicator.label}</span>
+                    {saveIndicator.detail && <em>{saveIndicator.detail}</em>}
+                  </div>
                 </div>
 
                 {currentDraft.kind === "thread" && (
@@ -3961,6 +4129,7 @@ function serializeDraftSignature(draft: WorkspaceState["drafts"][number]): strin
   return JSON.stringify({
     kind: draft.kind,
     title: draft.title,
+    topic: draft.topic ?? "",
     posts: draft.posts.map((post) => ({
       text: post.text,
       media: (post.media ?? []).map((item) => ({
@@ -4031,6 +4200,17 @@ function formatRelativeTime(value: string, locale: UiLocale): string {
   }
   const diffDay = Math.floor(diffHour / 24);
   return locale === "zh" ? `${diffDay} 天前` : `${diffDay}d ago`;
+}
+
+function formatSavedClock(value: string, locale: UiLocale): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  const ss = String(date.getSeconds()).padStart(2, "0");
+  return locale === "zh" ? `${hh}:${mm}:${ss}` : `${hh}:${mm}:${ss}`;
 }
 
 function formatCompactPreviewNumber(value: number): string {
