@@ -1670,7 +1670,12 @@ export function ComposeWorkbench() {
     if (!targetPost) {
       return;
     }
-    const fixed = applyRuleFix(toLintText(targetPost.text), issue.ruleId, whitelistTerms);
+    const lintSource = toLintText(targetPost.text);
+    const fixed = applyRuleFix(lintSource, issue.ruleId, whitelistTerms);
+    if (fixed === lintSource) {
+      setNotice(t("No auto-fix change for this issue.", "该问题当前没有可自动修复内容。"));
+      return;
+    }
     updatePostHtml(postId, toRichHtml(fixed));
     setNotice(locale === "zh" ? `${issue.ruleId} 已修复。` : `${issue.ruleId} fixed.`);
   }

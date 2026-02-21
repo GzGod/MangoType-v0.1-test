@@ -282,11 +282,9 @@ export function lintText(
   }
 
   if (ruleState.R003) {
-    pushRegexIssues(
+    pushNumberUnitIssues(
       issues,
-      "R003",
       input,
-      /\d(?:[A-Za-z]{1,5}|[kKmMgGtT]?[bB]ps|[kKmMgGtT]?[bB]|[kKmMgG]?[hH]z)\b/g,
       "数字与单位之间需要增加空格。",
       "例如 10 Gbps、20 TB。"
     );
@@ -526,6 +524,30 @@ function pushRegexIssues(
         suggestion
       )
     );
+    if (match.index === matcher.lastIndex) {
+      matcher.lastIndex += 1;
+    }
+    match = matcher.exec(source);
+  }
+}
+
+function pushNumberUnitIssues(
+  issues: RuleIssue[],
+  source: string,
+  message: string,
+  suggestion?: string
+): void {
+  const matcher = /(\d)([A-Za-z]{1,5}|[kKmMgGtT]?[bB]ps|[kKmMgGtT]?[bB]|[kKmMgG]?[hH]z)\b/g;
+  let match = matcher.exec(source);
+  while (match) {
+    const unit = match[2];
+    if (UNITS.has(unit.toLowerCase())) {
+      const start = match.index;
+      const end = match.index + match[0].length;
+      issues.push(
+        createIssue("R003", start, end, source.slice(start, end), message, suggestion)
+      );
+    }
     if (match.index === matcher.lastIndex) {
       matcher.lastIndex += 1;
     }
