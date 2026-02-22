@@ -696,7 +696,7 @@ export function ComposeWorkbench() {
       if (!(event.target instanceof HTMLElement)) {
         return;
       }
-      if (!event.target.closest(".tf-post-tools")) {
+      if (!event.target.closest(".tf-post-tools, .tf-inline-formatbar")) {
         setMediaMenuPostId(null);
         setAiMenuPostId(null);
         setMoreMenuPostId(null);
