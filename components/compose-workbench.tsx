@@ -34,7 +34,6 @@ import {
   normalizeWorkspaceState,
   publishQueueItem,
   retryQueueItem,
-  runDueQueue,
   sortPublishedDesc,
   sortQueueAsc,
   WORKSPACE_STORAGE_KEY,
@@ -109,6 +108,21 @@ type TenorGifTile = {
   previewUrl: string;
   width: number;
   height: number;
+};
+type XPublishResponse = {
+  data?: {
+    id?: string;
+  };
+  error?: string;
+  message?: string;
+  status?: number;
+  details?: {
+    detail?: string;
+    title?: string;
+    errors?: Array<{
+      message?: string;
+    }>;
+  };
 };
 
 const ONBOARDING_SEEN_KEY = "hanfully_v2_onboarding_seen";
@@ -359,6 +373,36 @@ function normalizeTopicLabel(value: string | undefined): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 28);
 }
 
+function computeRetryTimeIso(fromIso: string, attempt: number): string {
+  const retryMinutes = [2, 10, 30];
+  const index = Math.max(0, Math.min(retryMinutes.length - 1, attempt - 1));
+  const next = new Date(new Date(fromIso).getTime() + retryMinutes[index] * 60 * 1000);
+  return next.toISOString();
+}
+
+function resolveXPublishErrorMessage(
+  payload: XPublishResponse | null,
+  fallbackStatus: number,
+  locale: UiLocale
+): string {
+  const detail = payload?.details;
+  const firstDetailError = detail?.errors?.find((item) => typeof item.message === "string")?.message;
+  const bestMessage =
+    payload?.message ??
+    detail?.detail ??
+    firstDetailError ??
+    detail?.title ??
+    payload?.error;
+
+  if (bestMessage && bestMessage.trim().length > 0) {
+    return bestMessage;
+  }
+
+  return locale === "zh"
+    ? `发布失败（HTTP ${fallbackStatus}）。`
+    : `Publishing failed (HTTP ${fallbackStatus}).`;
+}
+
 export function ComposeWorkbench() {
   const [workspace, setWorkspace] = useState<WorkspaceState>(createDefaultWorkspaceState);
   const [paneTab, setPaneTab] = useState<PaneTab>("drafts");
@@ -581,9 +625,9 @@ export function ComposeWorkbench() {
     if (!hydrated) {
       return;
     }
-    runDueJobs({ silent: true });
+    void runDueJobs({ silent: true });
     const timer = window.setInterval(() => {
-      runDueJobs({ silent: true });
+      void runDueJobs({ silent: true });
     }, 25000);
     return () => window.clearInterval(timer);
   }, [hydrated, workspace.queue]);
@@ -863,7 +907,7 @@ export function ComposeWorkbench() {
       const key = event.key.toLowerCase();
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
-        publishCurrentDraft();
+        void publishCurrentDraft();
         return;
       }
       if ((event.ctrlKey || event.metaKey) && key === "s") {
@@ -1929,6 +1973,62 @@ export function ComposeWorkbench() {
     }));
   }
 
+  async function publishPostsToX(posts: WorkspaceState["drafts"][number]["posts"]) {
+    const publishablePosts = posts
+      .map((post) => ({
+        ...post,
+        text: post.text.trim()
+      }))
+      .filter((post) => post.text.length > 0);
+
+    if (publishablePosts.length === 0) {
+      throw new Error(t("No publishable text in this draft.", "当前草稿没有可发布内容。"));
+    }
+
+    const tweetIds: string[] = [];
+    let replyToId: string | undefined;
+
+    for (const post of publishablePosts) {
+      const response = await fetch("/api/x/tweets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          text: post.text,
+          replyToId
+        })
+      });
+
+      let payload: XPublishResponse | null = null;
+      try {
+        payload = (await response.json()) as XPublishResponse;
+      } catch {
+        payload = null;
+      }
+
+      if (!response.ok) {
+        throw new Error(resolveXPublishErrorMessage(payload, response.status, locale));
+      }
+
+      const tweetId = payload?.data?.id;
+      if (typeof tweetId !== "string" || !tweetId.trim()) {
+        throw new Error(
+          t(
+            "Publishing failed: X API did not return tweet id.",
+            "发布失败：X API 未返回推文 ID。"
+          )
+        );
+      }
+
+      const normalizedTweetId = tweetId.trim();
+      tweetIds.push(normalizedTweetId);
+      replyToId = normalizedTweetId;
+    }
+
+    return tweetIds;
+  }
+
   function queueCurrentDraft() {
     if (!currentDraft) {
       return;
@@ -1968,8 +2068,13 @@ export function ComposeWorkbench() {
     );
   }
 
-  function publishCurrentDraft() {
+  async function publishCurrentDraft() {
     if (!currentDraft) {
+      return;
+    }
+    if (authStatus !== "authenticated") {
+      setPublishState("blocked");
+      setNotice(t("Sign in with X before publishing.", "发布前请先登录 X 账号。"));
       return;
     }
     if (!publishReady) {
@@ -1979,9 +2084,34 @@ export function ComposeWorkbench() {
     }
     setPublishState("publishing");
     const prepared = prepareCurrentDraftForPublish();
+    const draftId = currentDraft.id;
+    const draftKind = currentDraft.kind;
+    try {
+      await publishPostsToX(prepared);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : t("Publishing failed. Please try again.", "发布失败，请稍后重试。");
+      updateWorkspace((prev) => ({
+        ...prev,
+        activity: appendActivityLogs(prev.activity, [
+          createActivityLog({
+            level: "error",
+            event: "manual_publish_failed",
+            message:
+              locale === "zh" ? `手动发布失败：${message}` : `Manual publish failed: ${message}`,
+            draftId
+          })
+        ])
+      }));
+      setPublishState("blocked");
+      setNotice(message);
+      return;
+    }
     const queueItem = buildQueueItem(prepared, new Date().toISOString(), {
-      sourceDraftId: currentDraft.id,
-      draftKind: currentDraft.kind
+      sourceDraftId: draftId,
+      draftKind
     });
     const published = publishQueueItem(queueItem);
     updateWorkspace((prev) => ({
@@ -1993,79 +2123,226 @@ export function ComposeWorkbench() {
           event: "manual_publish",
           message:
             locale === "zh"
-              ? `${draftKindLabel(currentDraft.kind, locale)}已手动发布。`
-              : `${draftKindLabel(currentDraft.kind, locale)} published manually.`,
+              ? `${draftKindLabel(draftKind, locale)}已手动发布。`
+              : `${draftKindLabel(draftKind, locale)} published manually.`,
           queueItemId: queueItem.id,
-          draftId: currentDraft.id
+          draftId
         })
       ])
     }));
     setPaneTab("posted");
     setPublishState("published");
     setNotice(
-      locale === "zh"
-        ? `${draftKindLabel(currentDraft.kind, locale)}已发布（模拟）。`
-        : `Published ${draftKindLabel(currentDraft.kind, locale)} (mock).`
+      locale === "zh" ? `${draftKindLabel(draftKind, locale)}已发布。` : `Published ${draftKindLabel(draftKind, locale)}.`
     );
   }
 
-  function runDueJobs(options?: { silent?: boolean }) {
-    const result = runDueQueue(workspace.queue);
-    if (result.attempted === 0) {
+  async function runDueJobs(options?: { silent?: boolean }) {
+    const now = Date.now();
+    const dueItems = workspace.queue
+      .filter((item) => {
+        const isPendingDue = item.status === "pending" && new Date(item.publishAt).getTime() <= now;
+        const isRetryDue =
+          item.status === "failed" &&
+          !!item.nextRetryAt &&
+          new Date(item.nextRetryAt).getTime() <= now &&
+          item.attemptCount < item.maxAttempts;
+        return isPendingDue || isRetryDue;
+      })
+      .sort(sortQueueAsc);
+
+    if (dueItems.length === 0) {
       if (!options?.silent) {
         setNotice(t("No due items right now.", "当前没有到期任务。"));
       }
       return;
     }
+
+    if (authStatus !== "authenticated") {
+      if (!options?.silent) {
+        setNotice(t("Sign in with X before running queue.", "执行队列前请先登录 X 账号。"));
+      }
+      return;
+    }
+
+    let succeeded = 0;
+    let failed = 0;
+    const publishedItems: WorkspaceState["published"] = [];
+    const failedById = new Map<string, WorkspaceState["queue"][number]>();
+    const succeededIds = new Set<string>();
+    const activityLogs: WorkspaceState["activity"] = [];
+
+    for (const item of dueItems) {
+      const nowIso = new Date().toISOString();
+      const nextAttempt = item.attemptCount + 1;
+      const attemptedItem = {
+        ...item,
+        attemptCount: nextAttempt,
+        lastAttemptAt: nowIso,
+        updatedAt: nowIso
+      };
+
+      try {
+        await publishPostsToX(item.posts);
+        succeeded += 1;
+        succeededIds.add(item.id);
+        publishedItems.push(publishQueueItem(attemptedItem));
+        activityLogs.push(
+          createActivityLog({
+            level: "info",
+            event: "queue_publish_succeeded",
+            message:
+              locale === "zh"
+                ? `已发布排程${draftKindLabel(item.draftKind ?? "thread", locale)}（${item.preview.slice(0, 36)}）。`
+                : `Published scheduled ${draftKindLabel(item.draftKind ?? "thread", locale).toLowerCase()} (${item.preview.slice(0, 36)}).`,
+            queueItemId: item.id,
+            draftId: item.sourceDraftId
+          })
+        );
+      } catch (error) {
+        failed += 1;
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : t("Publishing failed. Please try again.", "发布失败，请稍后重试。");
+        const retriesRemaining = nextAttempt < item.maxAttempts;
+        const retryAt = retriesRemaining ? computeRetryTimeIso(nowIso, nextAttempt) : undefined;
+        failedById.set(item.id, {
+          ...attemptedItem,
+          status: "failed",
+          nextRetryAt: retryAt,
+          lastError: errorMessage
+        });
+        activityLogs.push(
+          createActivityLog({
+            level: retriesRemaining ? "warn" : "error",
+            event: retriesRemaining ? "queue_retry_scheduled" : "queue_retry_exhausted",
+            message: retriesRemaining
+              ? locale === "zh"
+                ? `发布失败，将在 ${formatDateTime(retryAt as string)} 重试。`
+                : `Publish failed, retry at ${formatDateTime(retryAt as string)}.`
+              : locale === "zh"
+                ? `发布失败，已达到最大重试次数。`
+                : `Publish failed after ${nextAttempt} attempts.`,
+            queueItemId: item.id,
+            draftId: item.sourceDraftId
+          })
+        );
+      }
+    }
+
     updateWorkspace((prev) => ({
       ...prev,
-      queue: result.remaining,
-      published: [...result.published, ...prev.published].sort(sortPublishedDesc),
-      activity: appendActivityLogs(prev.activity, result.activity)
+      queue: prev.queue
+        .filter((item) => !succeededIds.has(item.id))
+        .map((item) => failedById.get(item.id) ?? item)
+        .sort(sortQueueAsc),
+      published: [...publishedItems, ...prev.published].sort(sortPublishedDesc),
+      activity: appendActivityLogs(prev.activity, activityLogs)
     }));
+
     if (!options?.silent) {
-      if (result.failed > 0) {
+      if (failed > 0) {
         setNotice(
           locale === "zh"
-            ? `队列执行：成功 ${result.succeeded}，失败 ${result.failed}。`
-            : `Queue run: ${result.succeeded} succeeded, ${result.failed} failed.`
+            ? `队列执行：成功 ${succeeded}，失败 ${failed}。`
+            : `Queue run: ${succeeded} succeeded, ${failed} failed.`
         );
       } else {
         setNotice(
-          locale === "zh"
-            ? `已执行 ${result.succeeded} 个到期任务。`
-            : `Executed ${result.succeeded} due items.`
+          locale === "zh" ? `已执行 ${succeeded} 个到期任务。` : `Executed ${succeeded} due items.`
         );
       }
     }
   }
 
-  function publishScheduledItem(id: string) {
-    updateWorkspace((prev) => {
-      const target = prev.queue.find((item) => item.id === id);
-      if (!target) {
-        return prev;
-      }
-      return {
+  async function publishScheduledItem(id: string) {
+    const target = workspace.queue.find((item) => item.id === id);
+    if (!target) {
+      return;
+    }
+
+    if (authStatus !== "authenticated") {
+      setPublishState("blocked");
+      setNotice(t("Sign in with X before publishing.", "发布前请先登录 X 账号。"));
+      return;
+    }
+
+    setPublishState("publishing");
+    const nowIso = new Date().toISOString();
+    const nextAttempt = target.attemptCount + 1;
+    const attemptedItem = {
+      ...target,
+      attemptCount: nextAttempt,
+      lastAttemptAt: nowIso,
+      updatedAt: nowIso
+    };
+
+    try {
+      await publishPostsToX(target.posts);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : t("Publishing failed. Please try again.", "发布失败，请稍后重试。");
+      const retriesRemaining = nextAttempt < target.maxAttempts;
+      const retryAt = retriesRemaining ? computeRetryTimeIso(nowIso, nextAttempt) : undefined;
+
+      updateWorkspace((prev) => ({
         ...prev,
-        queue: prev.queue.filter((item) => item.id !== id),
-        published: [publishQueueItem(target), ...prev.published].sort(sortPublishedDesc),
+        queue: prev.queue
+          .map((item) =>
+            item.id === id
+              ? {
+                  ...attemptedItem,
+                  status: "failed" as const,
+                  nextRetryAt: retryAt,
+                  lastError: errorMessage
+                }
+              : item
+          )
+          .sort(sortQueueAsc),
         activity: appendActivityLogs(prev.activity, [
           createActivityLog({
-            level: "info",
-            event: "manual_publish_from_queue",
-            message:
-              locale === "zh"
-                ? `已手动发布排程内容（${target.preview.slice(0, 36)}）。`
-                : `Scheduled item published manually (${target.preview.slice(0, 36)}).`,
+            level: retriesRemaining ? "warn" : "error",
+            event: retriesRemaining ? "queue_retry_scheduled" : "queue_retry_exhausted",
+            message: retriesRemaining
+              ? locale === "zh"
+                ? `发布失败，将在 ${formatDateTime(retryAt as string)} 重试。`
+                : `Publish failed, retry at ${formatDateTime(retryAt as string)}.`
+              : locale === "zh"
+                ? "发布失败，已达到最大重试次数。"
+                : `Publish failed after ${nextAttempt} attempts.`,
             queueItemId: target.id,
             draftId: target.sourceDraftId
           })
         ])
-      };
-    });
+      }));
+      setPublishState("blocked");
+      setNotice(errorMessage);
+      return;
+    }
+
+    updateWorkspace((prev) => ({
+      ...prev,
+      queue: prev.queue.filter((item) => item.id !== id),
+      published: [publishQueueItem(attemptedItem), ...prev.published].sort(sortPublishedDesc),
+      activity: appendActivityLogs(prev.activity, [
+        createActivityLog({
+          level: "info",
+          event: "manual_publish_from_queue",
+          message:
+            locale === "zh"
+              ? `已手动发布排程内容（${target.preview.slice(0, 36)}）。`
+              : `Scheduled item published manually (${target.preview.slice(0, 36)}).`,
+          queueItemId: target.id,
+          draftId: target.sourceDraftId
+        })
+      ])
+    }));
     setPaneTab("posted");
-    setNotice(t("Scheduled item published (mock).", "已发布排程内容（模拟）。"));
+    setPublishState("published");
+    setNotice(t("Scheduled item published.", "已发布排程内容。"));
   }
 
   function retryScheduledItem(id: string) {
@@ -2755,7 +3032,12 @@ export function ComposeWorkbench() {
                         {t("Retry", "重试")}
                       </button>
                     )}
-                    <button type="button" onClick={() => publishScheduledItem(item.id)}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void publishScheduledItem(item.id);
+                      }}
+                    >
                       {t("Publish", "发布")}
                     </button>
                   </div>
@@ -2896,7 +3178,9 @@ export function ComposeWorkbench() {
                   publishState === "published" && "is-success",
                   !publishReady && "is-blocked"
                 )}
-                onClick={publishCurrentDraft}
+                onClick={() => {
+                  void publishCurrentDraft();
+                }}
                 disabled={publishBusy}
                 title={t("Publish now", "立即发布")}
               >
@@ -3747,7 +4031,13 @@ export function ComposeWorkbench() {
                   {queueStats.failed} | {t("Waiting retry", "等待重试")}:{" "}
                   {queueStats.waitingRetry}
                 </p>
-                <button type="button" className="tf-btn schedule" onClick={() => runDueJobs()}>
+                <button
+                  type="button"
+                  className="tf-btn schedule"
+                  onClick={() => {
+                    void runDueJobs();
+                  }}
+                >
                   {t("Run Due Jobs", "执行到期任务")}
                 </button>
                 <div className="tf-activity-feed">
