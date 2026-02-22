@@ -3833,6 +3833,38 @@ export function ComposeWorkbench() {
                         editorRefs.current[currentPost.id] = element;
                       }}
                     />
+                    {(currentPost.media?.length ?? 0) > 0 && (
+                      <div className="tf-media-row">
+                        {(currentPost.media ?? []).map((media) => (
+                          <article key={media.id} className="tf-media-card">
+                            <div className="tf-media-preview">
+                              {media.url && (media.type === "image" || media.type === "gif") ? (
+                                <img src={media.url} alt={media.name} loading="lazy" />
+                              ) : media.url && media.type === "video" ? (
+                                <video src={media.url} controls preload="metadata" />
+                              ) : (
+                                <span>{media.type.toUpperCase()}</span>
+                              )}
+                            </div>
+                            <div className="tf-media-card-meta">
+                              <em>{media.type.toUpperCase()}</em>
+                              <strong title={media.name}>{media.name}</strong>
+                              <button
+                                type="button"
+                                onClick={() => removeMedia(currentPost.id, media.id)}
+                                aria-label={
+                                  locale === "zh"
+                                    ? `移除${media.type === "image" ? "图片" : media.type === "gif" ? "GIF" : "视频"} ${media.name}`
+                                    : `Remove ${media.type} ${media.name}`
+                                }
+                              >
+                                x
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
                     <div className="tf-inline-formatbar">
                       <button
                         type="button"
@@ -3862,6 +3894,35 @@ export function ComposeWorkbench() {
                       >
                         {t("List", "列表")}
                       </button>
+                      <div className="tf-tool-menu-wrap">
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            selectPost(currentPost.id);
+                            setMediaMenuPostId((prev) => (prev === currentPost.id ? null : currentPost.id));
+                            setAiMenuPostId(null);
+                            setMoreMenuPostId(null);
+                          }}
+                          aria-haspopup="menu"
+                          aria-expanded={mediaMenuPostId === currentPost.id}
+                          aria-controls={`media-menu-${currentPost.id}`}
+                        >
+                          IMG
+                        </button>
+                        {mediaMenuPostId === currentPost.id && (
+                          <div className="tf-popup tf-popup-dark" id={`media-menu-${currentPost.id}`} role="menu">
+                            <button type="button" onClick={() => openUploadForPost(currentPost.id)} role="menuitem">
+                              {t("Upload images or video", "上传图片或视频")}
+                              <kbd>ctrl shift i</kbd>
+                            </button>
+                            <button type="button" onClick={() => openGifPicker(currentPost.id)} role="menuitem">
+                              {t("Add GIF", "添加 GIF")}
+                            </button>
+                          </div>
+                        )}
+                      </div>
                       <button type="button" onClick={applyAllFixesToCurrentDraft}>
                         {t("Fix", "修复")}
                       </button>
@@ -3941,6 +4002,38 @@ export function ComposeWorkbench() {
                         editorRefs.current[currentPost.id] = element;
                       }}
                     />
+                    {(currentPost.media?.length ?? 0) > 0 && (
+                      <div className="tf-media-row">
+                        {(currentPost.media ?? []).map((media) => (
+                          <article key={media.id} className="tf-media-card">
+                            <div className="tf-media-preview">
+                              {media.url && (media.type === "image" || media.type === "gif") ? (
+                                <img src={media.url} alt={media.name} loading="lazy" />
+                              ) : media.url && media.type === "video" ? (
+                                <video src={media.url} controls preload="metadata" />
+                              ) : (
+                                <span>{media.type.toUpperCase()}</span>
+                              )}
+                            </div>
+                            <div className="tf-media-card-meta">
+                              <em>{media.type.toUpperCase()}</em>
+                              <strong title={media.name}>{media.name}</strong>
+                              <button
+                                type="button"
+                                onClick={() => removeMedia(currentPost.id, media.id)}
+                                aria-label={
+                                  locale === "zh"
+                                    ? `移除${media.type === "image" ? "图片" : media.type === "gif" ? "GIF" : "视频"} ${media.name}`
+                                    : `Remove ${media.type} ${media.name}`
+                                }
+                              >
+                                x
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
                     <div className="tf-inline-formatbar tf-inline-formatbar-article">
                       <button
                         type="button"
@@ -3984,6 +4077,35 @@ export function ComposeWorkbench() {
                       >
                         {t("List", "列表")}
                       </button>
+                      <div className="tf-tool-menu-wrap">
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            selectPost(currentPost.id);
+                            setMediaMenuPostId((prev) => (prev === currentPost.id ? null : currentPost.id));
+                            setAiMenuPostId(null);
+                            setMoreMenuPostId(null);
+                          }}
+                          aria-haspopup="menu"
+                          aria-expanded={mediaMenuPostId === currentPost.id}
+                          aria-controls={`media-menu-${currentPost.id}`}
+                        >
+                          IMG
+                        </button>
+                        {mediaMenuPostId === currentPost.id && (
+                          <div className="tf-popup tf-popup-dark" id={`media-menu-${currentPost.id}`} role="menu">
+                            <button type="button" onClick={() => openUploadForPost(currentPost.id)} role="menuitem">
+                              {t("Upload images or video", "上传图片或视频")}
+                              <kbd>ctrl shift i</kbd>
+                            </button>
+                            <button type="button" onClick={() => openGifPicker(currentPost.id)} role="menuitem">
+                              {t("Add GIF", "添加 GIF")}
+                            </button>
+                          </div>
+                        )}
+                      </div>
                       <button type="button" onClick={applyAllFixesToCurrentDraft}>
                         {t("Fix", "修复")}
                       </button>
