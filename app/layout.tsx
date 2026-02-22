@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import { AuthSessionProvider } from "@/components/auth-session-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Hanfully",
+  title: "MangoType",
   description: "Chinese-first X writer and scheduler"
 };
 
@@ -13,7 +14,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <AuthSessionProvider>{children}</AuthSessionProvider>
+      </body>
     </html>
   );
 }

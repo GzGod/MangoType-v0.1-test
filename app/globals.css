@@ -253,6 +253,10 @@ select:focus-visible,
   width: 100%;
 }
 
+.tf-app.sidebar-collapsed .tf-auth-btn {
+  display: none;
+}
+
 .tf-app.sidebar-collapsed .tf-control-btn {
   width: 30px;
   height: 30px;
@@ -330,6 +334,13 @@ select:focus-visible,
   font-weight: 700;
   color: #7a5a11;
   box-shadow: 0 2px 8px rgba(122, 90, 17, 0.2);
+  overflow: hidden;
+}
+
+.tf-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .tf-profile-meta strong {
@@ -366,6 +377,28 @@ select:focus-visible,
     margin-left var(--motion-base) var(--ease-standard),
     opacity var(--motion-fast) var(--ease-standard),
     transform var(--motion-fast) var(--ease-standard);
+}
+
+.tf-auth-btn {
+  border: 1px solid #d3deee;
+  border-radius: 999px;
+  background: #fff;
+  color: #3b5574;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tf-auth-btn:hover {
+  border-color: #bed0e7;
+  background: #edf5ff;
+}
+
+.tf-auth-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
 }
 
 .tf-workspace-controls {
@@ -1401,6 +1434,13 @@ select:focus-visible,
   color: #7a5a11;
   font-weight: 700;
   font-size: 12px;
+  overflow: hidden;
+}
+
+.tf-x-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .tf-x-thread-line {

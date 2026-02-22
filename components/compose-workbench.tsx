@@ -2,6 +2,8 @@
 
 import clsx from "clsx";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { signIn, signOut, useSession } from "next-auth/react";
+import type { Session } from "next-auth";
 import {
   applyAllFixes,
   applyRuleFix,
@@ -411,7 +413,10 @@ export function ComposeWorkbench() {
   const gifSearchRef = useRef<HTMLInputElement | null>(null);
   const gifRequestRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const { data: session, status: authStatus } = useSession();
   const t = (en: string, zh: string) => (locale === "zh" ? zh : en);
+  const authorIdentity = useMemo(() => resolveAuthorIdentity(session), [session]);
+  const profileSubtitle = authorIdentity.signedIn ? authorIdentity.handle : t("Workspace", "工作区");
   const tenorApiKey = (process.env.NEXT_PUBLIC_TENOR_API_KEY ?? TENOR_DEFAULT_KEY).trim() || TENOR_DEFAULT_KEY;
 
   useEffect(() => {
@@ -2142,6 +2147,14 @@ export function ComposeWorkbench() {
     setCommandOpen((prev) => !prev);
   }
 
+  async function handleAuthAction() {
+    if (authorIdentity.signedIn) {
+      await signOut({ callbackUrl: "/" });
+      return;
+    }
+    await signIn("twitter", { callbackUrl: "/" });
+  }
+
   const quickCommands: QuickCommand[] = [
     {
       id: "new_tweet",
@@ -2325,14 +2338,29 @@ export function ComposeWorkbench() {
           <div className="tf-workspace-head">
             {!sidebarCollapsed && (
               <div className="tf-profile">
-                <div className="tf-avatar">x</div>
-                <div className="tf-profile-meta">
-                  <strong>xuegao</strong>
-                  <span>{t("Workspace", "工作区")}</span>
+                <div className="tf-avatar">
+                  {authorIdentity.image ? (
+                    <img src={authorIdentity.image} alt={authorIdentity.name} loading="lazy" />
+                  ) : (
+                    authorIdentity.initial
+                  )}
                 </div>
-                <span className="tf-profile-caret" aria-hidden>
-                  v
-                </span>
+                <div className="tf-profile-meta">
+                  <strong>{authorIdentity.name}</strong>
+                  <span>{profileSubtitle}</span>
+                </div>
+                <button
+                  type="button"
+                  className="tf-auth-btn"
+                  onClick={() => void handleAuthAction()}
+                  disabled={authStatus === "loading"}
+                >
+                  {authStatus === "loading"
+                    ? t("Loading...", "加载中...")
+                    : authorIdentity.signedIn
+                      ? t("Sign out", "退出")
+                      : t("Sign in X", "登录 X")}
+                </button>
               </div>
             )}
             <div className="tf-workspace-controls">
@@ -2902,13 +2930,19 @@ export function ComposeWorkbench() {
                     return (
                       <article key={post.id} className="tf-x-post-card">
                         <div className="tf-x-avatar-wrap">
-                          <div className="tf-x-avatar">x</div>
+                          <div className="tf-x-avatar">
+                            {authorIdentity.image ? (
+                              <img src={authorIdentity.image} alt={authorIdentity.name} loading="lazy" />
+                            ) : (
+                              authorIdentity.initial
+                            )}
+                          </div>
                           {showThreadLine && <span className="tf-x-thread-line" aria-hidden />}
                         </div>
                         <div className="tf-x-post-main">
                           <div className="tf-x-post-head">
-                            <strong>xuegao</strong>
-                            <span>@0xuegao</span>
+                            <strong>{authorIdentity.name}</strong>
+                            <span>{authorIdentity.handle}</span>
                             <i aria-hidden>·</i>
                             <span>{t("now", "刚刚")}</span>
                           </div>
@@ -3129,8 +3163,8 @@ export function ComposeWorkbench() {
                           )}
                         >
                           <div className="tf-post-head">
-                            <span className="name">xuegao</span>
-                            <span className="handle">@0xuegao</span>
+                            <span className="name">{authorIdentity.name}</span>
+                            <span className="handle">{authorIdentity.handle}</span>
                           </div>
                           <RichEditor
                             value={post.text}
@@ -3428,8 +3462,8 @@ export function ComposeWorkbench() {
                     )}
                   >
                     <div className="tf-post-head">
-                      <span className="name">xuegao</span>
-                      <span className="handle">@0xuegao</span>
+                      <span className="name">{authorIdentity.name}</span>
+                      <span className="handle">{authorIdentity.handle}</span>
                       <span
                         className={clsx("count", countByPost[currentPost.id]?.valid ? "ok" : "warn")}
                       >
@@ -4313,6 +4347,57 @@ function formatSavedClock(value: string, locale: UiLocale): string {
   const mm = String(date.getMinutes()).padStart(2, "0");
   const ss = String(date.getSeconds()).padStart(2, "0");
   return locale === "zh" ? `${hh}:${mm}:${ss}` : `${hh}:${mm}:${ss}`;
+}
+
+type AuthorIdentity = {
+  signedIn: boolean;
+  name: string;
+  username: string;
+  handle: string;
+  image: string | null;
+  initial: string;
+};
+
+function resolveAuthorIdentity(session: Session | null | undefined): AuthorIdentity {
+  const fallbackName = "xuegao";
+  const fallbackUsername = "0xuegao";
+  const name = cleanDisplayName(session?.user?.name) ?? fallbackName;
+  const username =
+    normalizeUsername(session?.user?.username) ?? normalizeUsername(name) ?? fallbackUsername;
+  const handle = `@${username}`;
+  const image = session?.user?.image?.trim() || null;
+  return {
+    signedIn: !!session?.user,
+    name,
+    username,
+    handle,
+    image,
+    initial: takeInitial(name)
+  };
+}
+
+function cleanDisplayName(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeUsername(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value
+    .trim()
+    .replace(/^@+/, "")
+    .replace(/[^A-Za-z0-9_]/g, "");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function takeInitial(value: string): string {
+  const head = value.trim().charAt(0);
+  return head ? head.toLowerCase() : "x";
 }
 
 function formatCompactPreviewNumber(value: number): string {
