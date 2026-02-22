@@ -393,6 +393,12 @@ export function ComposeWorkbench() {
   const [previewMobile, setPreviewMobile] = useState(false);
   const [draftHistory, setDraftHistory] = useState<Record<string, DraftSnapshot[]>>({});
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [authConfig, setAuthConfig] = useState({
+    ready: true,
+    hasAuthSecret: true,
+    hasTwitterProvider: true,
+    checked: false
+  });
   const [selectionToolbar, setSelectionToolbar] = useState<{
     visible: boolean;
     x: number;
@@ -415,9 +421,60 @@ export function ComposeWorkbench() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { data: session, status: authStatus } = useSession();
   const t = (en: string, zh: string) => (locale === "zh" ? zh : en);
+  const authReady = authConfig.ready;
+  const authMissingHint =
+    !authConfig.hasTwitterProvider && !authConfig.hasAuthSecret
+      ? t("Set AUTH_TWITTER_ID / AUTH_TWITTER_SECRET and NEXTAUTH_SECRET.", "请配置 AUTH_TWITTER_ID / AUTH_TWITTER_SECRET 与 NEXTAUTH_SECRET。")
+      : !authConfig.hasTwitterProvider
+        ? t("Set AUTH_TWITTER_ID and AUTH_TWITTER_SECRET.", "请配置 AUTH_TWITTER_ID 与 AUTH_TWITTER_SECRET。")
+        : !authConfig.hasAuthSecret
+          ? t("Set NEXTAUTH_SECRET.", "请配置 NEXTAUTH_SECRET。")
+          : "";
   const authorIdentity = useMemo(() => resolveAuthorIdentity(session), [session]);
   const profileSubtitle = authorIdentity.signedIn ? authorIdentity.handle : t("Workspace", "工作区");
   const tenorApiKey = (process.env.NEXT_PUBLIC_TENOR_API_KEY ?? TENOR_DEFAULT_KEY).trim() || TENOR_DEFAULT_KEY;
+
+  useEffect(() => {
+    let active = true;
+    async function loadAuthConfig() {
+      try {
+        const response = await fetch("/api/auth/config-status", {
+          method: "GET",
+          cache: "no-store"
+        });
+        if (!response.ok) {
+          throw new Error("auth-config-failed");
+        }
+        const payload = (await response.json()) as {
+          ready?: boolean;
+          hasAuthSecret?: boolean;
+          hasTwitterProvider?: boolean;
+        };
+        if (!active) {
+          return;
+        }
+        setAuthConfig({
+          ready: Boolean(payload.ready),
+          hasAuthSecret: Boolean(payload.hasAuthSecret),
+          hasTwitterProvider: Boolean(payload.hasTwitterProvider),
+          checked: true
+        });
+      } catch {
+        if (!active) {
+          return;
+        }
+        setAuthConfig((prev) => ({
+          ...prev,
+          ready: false,
+          checked: true
+        }));
+      }
+    }
+    void loadAuthConfig();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
@@ -2152,6 +2209,13 @@ export function ComposeWorkbench() {
       await signOut({ callbackUrl: "/" });
       return;
     }
+    if (!authReady) {
+      setNotice(
+        authMissingHint ||
+          t("X login is not configured yet. Check environment variables.", "X 登录尚未配置，请检查环境变量。")
+      );
+      return;
+    }
     await signIn("twitter", { callbackUrl: "/" });
   }
 
@@ -2353,13 +2417,18 @@ export function ComposeWorkbench() {
                   type="button"
                   className="tf-auth-btn"
                   onClick={() => void handleAuthAction()}
-                  disabled={authStatus === "loading"}
+                  disabled={authStatus === "loading" || (!authorIdentity.signedIn && !authReady)}
+                  title={!authorIdentity.signedIn && !authReady ? authMissingHint : undefined}
                 >
                   {authStatus === "loading"
                     ? t("Loading...", "加载中...")
                     : authorIdentity.signedIn
                       ? t("Sign out", "退出")
-                      : t("Sign in X", "登录 X")}
+                      : !authConfig.checked
+                        ? t("Checking...", "检测中...")
+                        : authReady
+                          ? t("Sign in X", "登录 X")
+                          : t("Not configured", "未配置")}
                 </button>
               </div>
             )}
