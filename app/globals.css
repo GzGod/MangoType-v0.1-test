@@ -686,6 +686,67 @@ select:focus-visible,
   z-index: 40;
 }
 
+.tf-draft-picker-topic {
+  border: 1px solid #d7e0ec;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 8px;
+  margin: 0 0 6px;
+}
+
+.tf-draft-picker-topic label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #3f5570;
+  margin-bottom: 6px;
+}
+
+.tf-draft-picker-topic input {
+  width: 100%;
+  border: 1px solid #cfd9e7;
+  border-radius: 8px;
+  background: #fff;
+  color: #122742;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 8px;
+}
+
+.tf-draft-picker-topic input:focus-visible {
+  outline: none;
+  border-color: #b8cce6;
+  box-shadow: 0 0 0 2px rgba(56, 132, 220, 0.14);
+}
+
+.tf-draft-picker-topic-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.tf-draft-picker-topic-suggest button {
+  border: 1px solid #d1dced;
+  border-radius: 999px;
+  background: #fff;
+  color: #405772;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.tf-draft-picker-topic-suggest button:hover {
+  border-color: #bed0e7;
+  background: #edf5ff;
+}
+
+.tf-draft-picker-topic-suggest button.ghost {
+  border-style: dashed;
+  color: #6a7f98;
+}
+
 .tf-draft-picker-item {
   width: 100%;
   border: 0;
@@ -725,6 +786,44 @@ select:focus-visible,
     opacity var(--motion-fast) var(--ease-standard),
     transform var(--motion-fast) var(--ease-standard),
     padding var(--motion-base) var(--ease-standard);
+}
+
+.tf-draft-group {
+  margin-bottom: 10px;
+}
+
+.tf-draft-group:last-child {
+  margin-bottom: 0;
+}
+
+.tf-draft-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 6px;
+  padding: 0 2px;
+}
+
+.tf-draft-group-head strong {
+  font-size: 11px;
+  font-weight: 700;
+  color: #4a5f78;
+  letter-spacing: 0.01em;
+}
+
+.tf-draft-group-head span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid #d6e0ec;
+  background: #f8fbff;
+  color: #6b819b;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 6px;
 }
 
 .tf-side-list::-webkit-scrollbar {
@@ -1673,6 +1772,38 @@ select:focus-visible,
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.tf-top-save-indicator {
+  border: 1px solid #d4deec;
+  border-radius: 999px;
+  background: #f7faff;
+  color: #566c86;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tf-top-save-indicator em {
+  font-style: normal;
+  color: #7388a1;
+  font-weight: 500;
+}
+
+.tf-top-save-indicator.is-saving {
+  border-color: #c9daef;
+  background: #eef6ff;
+  color: #315f90;
+}
+
+.tf-top-save-indicator.is-failed {
+  border-color: #efc9ce;
+  background: #fff2f4;
+  color: #b33f4f;
 }
 
 .tf-locale-switch {
@@ -3485,6 +3616,10 @@ select:focus-visible,
 
   .tf-save-indicator {
     margin-left: 0;
+  }
+
+  .tf-top-save-indicator em {
+    display: none;
   }
 
   .tf-gif-grid {

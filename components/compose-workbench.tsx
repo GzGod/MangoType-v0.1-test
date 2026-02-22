@@ -374,6 +374,7 @@ export function ComposeWorkbench() {
   const [workspaceSaveState, setWorkspaceSaveState] = useState<WorkspaceSaveState>("saved");
   const [workspaceLastSavedAt, setWorkspaceLastSavedAt] = useState<string | null>(null);
   const [topicFilter, setTopicFilter] = useState<string>(TOPIC_FILTER_ALL);
+  const [newDraftTopic, setNewDraftTopic] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
@@ -998,22 +999,68 @@ export function ComposeWorkbench() {
     return draftItems.filter((item) => item.topic === topicFilter);
   }, [draftItems, topicFilter]);
 
+  const topicSuggestions = useMemo(() => {
+    const fromFilters = topicFilterOptions
+      .filter((option) => option.value !== TOPIC_FILTER_ALL && option.value !== TOPIC_FILTER_UNTAGGED)
+      .map((option) => option.label);
+    if (topicFilter !== TOPIC_FILTER_ALL && topicFilter !== TOPIC_FILTER_UNTAGGED) {
+      const fromCurrent = normalizeTopicLabel(topicFilter);
+      if (fromCurrent) {
+        fromFilters.unshift(fromCurrent);
+      }
+    }
+    return Array.from(new Set(fromFilters)).slice(0, 6);
+  }, [topicFilter, topicFilterOptions]);
+
+  const groupedDraftItems = useMemo(() => {
+    const groups = new Map<
+      string,
+      { key: string; label: string; items: Array<(typeof draftItems)[number]> }
+    >();
+    visibleDraftItems.forEach((item) => {
+      const key = item.topic || TOPIC_FILTER_UNTAGGED;
+      const label = item.topic || (locale === "zh" ? "未分组" : "Untagged");
+      const existing = groups.get(key);
+      if (existing) {
+        existing.items.push(item);
+        return;
+      }
+      groups.set(key, {
+        key,
+        label,
+        items: [item]
+      });
+    });
+    return Array.from(groups.values()).sort((a, b) => {
+      const aUntagged = a.key === TOPIC_FILTER_UNTAGGED;
+      const bUntagged = b.key === TOPIC_FILTER_UNTAGGED;
+      if (aUntagged !== bUntagged) {
+        return aUntagged ? 1 : -1;
+      }
+      if (b.items.length !== a.items.length) {
+        return b.items.length - a.items.length;
+      }
+      return a.label.localeCompare(b.label, locale === "zh" ? "zh-Hans" : "en");
+    });
+  }, [draftItems, locale, visibleDraftItems]);
+
   const saveIndicator = useMemo(() => {
+    const lastSaved = workspaceLastSavedAt ? formatSavedClock(workspaceLastSavedAt, locale) : "";
     if (workspaceSaveState === "saving") {
       return {
         label: t("Saving...", "保存中..."),
-        detail: ""
+        detail: lastSaved ? t(`Last saved ${lastSaved}`, `上次保存 ${lastSaved}`) : ""
       };
     }
     if (workspaceSaveState === "failed") {
       return {
         label: t("Save failed", "保存失败"),
-        detail: ""
+        detail: lastSaved ? t(`Last saved ${lastSaved}`, `上次保存 ${lastSaved}`) : ""
       };
     }
     return {
       label: t("Saved", "已保存"),
-      detail: workspaceLastSavedAt ? formatSavedClock(workspaceLastSavedAt, locale) : ""
+      detail: lastSaved ? t(`at ${lastSaved}`, `${lastSaved}`) : ""
     };
   }, [locale, t, workspaceLastSavedAt, workspaceSaveState]);
 
@@ -1260,9 +1307,11 @@ export function ComposeWorkbench() {
     }));
   }
 
-  function createNewDraft(kind: DraftKind) {
-    const seedTopic =
-      topicFilter !== TOPIC_FILTER_ALL && topicFilter !== TOPIC_FILTER_UNTAGGED
+  function createNewDraft(kind: DraftKind, topicOverride?: string) {
+    const normalizedOverride = normalizeTopicLabel(topicOverride);
+    const seedTopic = normalizedOverride
+      ? normalizedOverride
+      : topicFilter !== TOPIC_FILTER_ALL && topicFilter !== TOPIC_FILTER_UNTAGGED
         ? normalizeTopicLabel(topicFilter)
         : undefined;
     const fresh = createDraft(kind, { topic: seedTopic });
@@ -1274,11 +1323,12 @@ export function ComposeWorkbench() {
     }));
     setPaneTab("drafts");
     setDraftPickerOpen(false);
+    setNewDraftTopic("");
     addDraftSnapshot(fresh, "Created", "manual");
     setNotice(
       locale === "zh"
-        ? `已创建${draftKindLabel(kind, locale)}草稿。`
-        : `Created ${draftKindLabel(kind, locale)} draft.`
+        ? `已创建${draftKindLabel(kind, locale)}草稿${seedTopic ? `（${seedTopic}）` : ""}。`
+        : `Created ${draftKindLabel(kind, locale)} draft${seedTopic ? ` in ${seedTopic}` : ""}.`
     );
   }
 
@@ -2418,7 +2468,19 @@ export function ComposeWorkbench() {
             <button
               type="button"
               className="tf-new-draft"
-              onClick={() => setDraftPickerOpen((prev) => !prev)}
+              onClick={() =>
+                setDraftPickerOpen((prev) => {
+                  const next = !prev;
+                  if (next) {
+                    const seed =
+                      topicFilter !== TOPIC_FILTER_ALL && topicFilter !== TOPIC_FILTER_UNTAGGED
+                        ? normalizeTopicLabel(topicFilter)
+                        : "";
+                    setNewDraftTopic(seed);
+                  }
+                  return next;
+                })
+              }
               aria-expanded={draftPickerOpen}
               aria-haspopup="menu"
               aria-controls="draft-kind-picker"
@@ -2427,12 +2489,39 @@ export function ComposeWorkbench() {
             </button>
             {draftPickerOpen && (
               <div className="tf-draft-picker" id="draft-kind-picker" role="menu">
+                <div className="tf-draft-picker-topic">
+                  <label htmlFor="tf-new-draft-topic">
+                    {t("Topic / Group (optional)", "话题 / 分组（可选）")}
+                  </label>
+                  <input
+                    id="tf-new-draft-topic"
+                    value={newDraftTopic}
+                    onChange={(event) => setNewDraftTopic(event.target.value.slice(0, 28))}
+                    onBlur={(event) => setNewDraftTopic(normalizeTopicLabel(event.target.value))}
+                    placeholder={t("e.g. Product launch", "例如：产品发布")}
+                    autoComplete="off"
+                  />
+                  {topicSuggestions.length > 0 && (
+                    <div className="tf-draft-picker-topic-suggest">
+                      {topicSuggestions.map((topic) => (
+                        <button key={topic} type="button" onClick={() => setNewDraftTopic(topic)}>
+                          {topic}
+                        </button>
+                      ))}
+                      {newDraftTopic.trim() && (
+                        <button type="button" className="ghost" onClick={() => setNewDraftTopic("")}>
+                          {t("Clear", "清空")}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
                 {localizedDraftOptions.map((option) => (
                   <button
                     key={option.kind}
                     type="button"
                     className="tf-draft-picker-item"
-                    onClick={() => createNewDraft(option.kind)}
+                    onClick={() => createNewDraft(option.kind, newDraftTopic)}
                     role="menuitem"
                   >
                     <strong>{option.title}</strong>
@@ -2472,56 +2561,64 @@ export function ComposeWorkbench() {
         </div>
         <div className="tf-side-list">
           {paneTab === "drafts" &&
-            visibleDraftItems.map((item) => (
-              <article
-                key={item.id}
-                className={clsx(
-                  "tf-draft-item",
-                  workspace.selectedDraftId === item.id && "active"
-                )}
-                onClick={() => selectDraft(item.id)}
-              >
-                <div className="tf-draft-title-row">
-                  <strong>
-                    <span className="tf-draft-kind-icon" aria-hidden>
-                      {kindIcon(item.kind)}
-                    </span>
-                    {item.title}
-                  </strong>
-                  <span className={clsx("tf-kind-badge", `tf-kind-${item.kind}`)}>
-                    {draftKindLabel(item.kind, locale)}
-                  </span>
-                </div>
-                {item.topic && <div className="tf-draft-topic-pill">{item.topic}</div>}
-                <p>{item.preview}</p>
-                <div className="tf-draft-progress">
-                  <div
-                    className={clsx("tf-draft-progress-fill", item.overLimit && "warn")}
-                    style={{ width: `${Math.max(6, Math.min(100, Math.round(item.usageRatio * 100)))}%` }}
-                  />
-                </div>
-                <div className="tf-draft-meta">
-                  <span>
-                    {item.postCount} {t("posts", "条")}
-                  </span>
-                  <span>
-                    {item.weightedChars} {t("chars", "字符")}
-                  </span>
-                  <span>{formatRelativeTime(item.updatedAt, locale)}</span>
-                  <span className={item.issueCount === 0 ? "ok" : "warn"}>
-                    {item.issueCount} {t("issues", "问题")}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      removeDraft(item.id);
-                    }}
+            groupedDraftItems.map((group) => (
+              <section key={group.key} className="tf-draft-group">
+                <header className="tf-draft-group-head">
+                  <strong>{group.label}</strong>
+                  <span>{group.items.length}</span>
+                </header>
+                {group.items.map((item) => (
+                  <article
+                    key={item.id}
+                    className={clsx(
+                      "tf-draft-item",
+                      workspace.selectedDraftId === item.id && "active"
+                    )}
+                    onClick={() => selectDraft(item.id)}
                   >
-                    {t("Delete", "删除")}
-                  </button>
-                </div>
-              </article>
+                    <div className="tf-draft-title-row">
+                      <strong>
+                        <span className="tf-draft-kind-icon" aria-hidden>
+                          {kindIcon(item.kind)}
+                        </span>
+                        {item.title}
+                      </strong>
+                      <span className={clsx("tf-kind-badge", `tf-kind-${item.kind}`)}>
+                        {draftKindLabel(item.kind, locale)}
+                      </span>
+                    </div>
+                    {item.topic && <div className="tf-draft-topic-pill">{item.topic}</div>}
+                    <p>{item.preview}</p>
+                    <div className="tf-draft-progress">
+                      <div
+                        className={clsx("tf-draft-progress-fill", item.overLimit && "warn")}
+                        style={{ width: `${Math.max(6, Math.min(100, Math.round(item.usageRatio * 100)))}%` }}
+                      />
+                    </div>
+                    <div className="tf-draft-meta">
+                      <span>
+                        {item.postCount} {t("posts", "条")}
+                      </span>
+                      <span>
+                        {item.weightedChars} {t("chars", "字符")}
+                      </span>
+                      <span>{formatRelativeTime(item.updatedAt, locale)}</span>
+                      <span className={item.issueCount === 0 ? "ok" : "warn"}>
+                        {item.issueCount} {t("issues", "问题")}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeDraft(item.id);
+                        }}
+                      >
+                        {t("Delete", "删除")}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </section>
             ))}
           {paneTab === "drafts" && visibleDraftItems.length === 0 && (
             <div className="tf-empty-topic-state">
@@ -2643,6 +2740,10 @@ export function ComposeWorkbench() {
           <div className="tf-topbar">
             <div className="tf-platform">X</div>
             <div className="tf-top-actions">
+              <div className={clsx("tf-top-save-indicator", `is-${workspaceSaveState}`)} aria-live="polite">
+                <strong>{saveIndicator.label}</strong>
+                {saveIndicator.detail && <em>{saveIndicator.detail}</em>}
+              </div>
               <div className="tf-locale-switch" role="group" aria-label={t("Language switch", "语言切换")}>
                 <button
                   type="button"
@@ -3007,10 +3108,6 @@ export function ComposeWorkbench() {
                   <button type="button" onClick={() => setShortcutsOpen(true)}>
                     {t("Shortcuts", "快捷键")}
                   </button>
-                  <div className={clsx("tf-save-indicator", `is-${workspaceSaveState}`)} aria-live="polite">
-                    <span>{saveIndicator.label}</span>
-                    {saveIndicator.detail && <em>{saveIndicator.detail}</em>}
-                  </div>
                 </div>
 
                 {currentDraft.kind === "thread" && (
