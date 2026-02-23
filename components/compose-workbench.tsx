@@ -2122,7 +2122,7 @@ export function ComposeWorkbench() {
     const publishablePosts = posts
       .map((post) => ({
         ...post,
-        text: post.text.trim()
+        text: toTweetText(post.text, workspace.tweetFormatMode).trim()
       }))
       .filter((post) => post.text.length > 0);
 
