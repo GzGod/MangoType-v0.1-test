@@ -45,28 +45,28 @@ export async function POST(request: NextRequest) {
   }
 
   const text = typeof payload.text === "string" ? payload.text.trim() : "";
-  if (!text) {
+  const mediaIdsFromPayload = Array.isArray(payload.mediaIds)
+    ? payload.mediaIds.map((item) => String(item).trim()).filter(Boolean).slice(0, 4)
+    : [];
+  if (!text && mediaIdsFromPayload.length === 0) {
     return NextResponse.json(
       {
-        error: "missing_text",
-        message: "Tweet text is required."
+        error: "missing_text_and_media",
+        message: "Tweet requires text or at least one media id."
       },
       { status: 400 }
     );
   }
 
-  const body: Record<string, unknown> = { text };
+  const body: Record<string, unknown> = {};
+  if (text) {
+    body.text = text;
+  }
   if (typeof payload.replyToId === "string" && payload.replyToId.trim()) {
     body.reply = { in_reply_to_tweet_id: payload.replyToId.trim() };
   }
-  if (Array.isArray(payload.mediaIds) && payload.mediaIds.length > 0) {
-    const media_ids = payload.mediaIds
-      .map((item) => String(item).trim())
-      .filter(Boolean)
-      .slice(0, 4);
-    if (media_ids.length > 0) {
-      body.media = { media_ids };
-    }
+  if (mediaIdsFromPayload.length > 0) {
+    body.media = { media_ids: mediaIdsFromPayload };
   }
 
   const response = await fetch("https://api.x.com/2/tweets", {

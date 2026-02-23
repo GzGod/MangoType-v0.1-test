@@ -122,7 +122,7 @@ export const authOptions: NextAuthOptions = {
           version: "2.0",
           authorization: {
             params: {
-              scope: "users.read tweet.read tweet.write offline.access"
+              scope: "users.read tweet.read tweet.write media.write offline.access"
             }
           },
           profile(profile) {

@@ -124,6 +124,15 @@ type XPublishResponse = {
     }>;
   };
 };
+type XMediaUploadResponse = {
+  mediaId?: string;
+  data?: {
+    id?: string;
+  };
+  error?: string;
+  message?: string;
+};
+type DraftPostMedia = NonNullable<WorkspaceState["drafts"][number]["posts"][number]["media"]>[number];
 
 const ONBOARDING_SEEN_KEY = "hanfully_v2_onboarding_seen";
 const THEME_STORAGE_KEY = "hanfully_v2_theme";
@@ -401,6 +410,30 @@ function resolveXPublishErrorMessage(
   return locale === "zh"
     ? `发布失败（HTTP ${fallbackStatus}）。`
     : `Publishing failed (HTTP ${fallbackStatus}).`;
+}
+
+function resolveXMediaUploadErrorMessage(
+  payload: XMediaUploadResponse | null,
+  fallbackStatus: number,
+  locale: UiLocale
+): string {
+  const bestMessage = payload?.message ?? payload?.error;
+  if (bestMessage && bestMessage.trim().length > 0) {
+    return bestMessage;
+  }
+  return locale === "zh"
+    ? `媒体上传失败（HTTP ${fallbackStatus}）。`
+    : `Media upload failed (HTTP ${fallbackStatus}).`;
+}
+
+function inferMediaMimeType(media: DraftPostMedia): string {
+  if (media.type === "gif") {
+    return "image/gif";
+  }
+  if (media.type === "video") {
+    return "video/mp4";
+  }
+  return "image/png";
 }
 
 export function ComposeWorkbench() {
@@ -1973,6 +2006,89 @@ export function ComposeWorkbench() {
     }));
   }
 
+  async function uploadSingleMediaToX(media: DraftPostMedia): Promise<string> {
+    if (!media.url) {
+      throw new Error(t("Media source missing.", "媒体源缺失。"));
+    }
+
+    let response: Response;
+    const isLocalMedia = media.url.startsWith("blob:") || media.url.startsWith("data:");
+    if (isLocalMedia) {
+      const mediaResponse = await fetch(media.url, { cache: "no-store" });
+      if (!mediaResponse.ok) {
+        throw new Error(
+          t("Unable to read local media file.", "读取本地媒体文件失败。")
+        );
+      }
+      const blob = await mediaResponse.blob();
+      const mimeType = blob.type || inferMediaMimeType(media);
+      const fileName = media.name?.trim() || `upload-${Date.now()}`;
+      const file = new File([blob], fileName, { type: mimeType });
+      const formData = new FormData();
+      formData.set("file", file);
+      formData.set("mediaType", media.type);
+      response = await fetch("/api/x/media", {
+        method: "POST",
+        body: formData,
+        credentials: "same-origin"
+      });
+    } else {
+      response = await fetch("/api/x/media", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          sourceUrl: media.url,
+          filename: media.name,
+          mimeType: inferMediaMimeType(media),
+          mediaType: media.type
+        })
+      });
+    }
+
+    let payload: XMediaUploadResponse | null = null;
+    try {
+      payload = (await response.json()) as XMediaUploadResponse;
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error(
+          t(
+            "X session expired. Please sign in again, then retry publishing.",
+            "X 登录态已失效，请重新登录后再发布。"
+          )
+        );
+      }
+      throw new Error(resolveXMediaUploadErrorMessage(payload, response.status, locale));
+    }
+
+    const mediaId = payload?.mediaId ?? payload?.data?.id;
+    if (!mediaId || !mediaId.trim()) {
+      throw new Error(
+        t(
+          "Media upload failed: missing media id.",
+          "媒体上传失败：未返回 media id。"
+        )
+      );
+    }
+    return mediaId.trim();
+  }
+
+  async function uploadMediaIdsForPost(post: WorkspaceState["drafts"][number]["posts"][number]) {
+    const mediaList = (post.media ?? []).slice(0, 4);
+    const mediaIds: string[] = [];
+    for (const media of mediaList) {
+      const mediaId = await uploadSingleMediaToX(media);
+      mediaIds.push(mediaId);
+    }
+    return mediaIds;
+  }
+
   async function publishPostsToX(posts: WorkspaceState["drafts"][number]["posts"]) {
     const publishablePosts = posts
       .map((post) => ({
@@ -1989,6 +2105,7 @@ export function ComposeWorkbench() {
     let replyToId: string | undefined;
 
     for (const post of publishablePosts) {
+      const mediaIds = await uploadMediaIdsForPost(post);
       const response = await fetch("/api/x/tweets", {
         method: "POST",
         headers: {
@@ -1997,7 +2114,8 @@ export function ComposeWorkbench() {
         credentials: "same-origin",
         body: JSON.stringify({
           text: post.text,
-          replyToId
+          replyToId,
+          mediaIds
         })
       });
 
