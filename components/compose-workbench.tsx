@@ -439,6 +439,7 @@ function inferMediaMimeType(media: DraftPostMedia): string {
 export function ComposeWorkbench() {
   const [workspace, setWorkspace] = useState<WorkspaceState>(createDefaultWorkspaceState);
   const [paneTab, setPaneTab] = useState<PaneTab>("drafts");
+  const [selectedPublishedId, setSelectedPublishedId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [notice, setNotice] = useState("");
   const [draftPickerOpen, setDraftPickerOpen] = useState(false);
@@ -509,6 +510,7 @@ export function ComposeWorkbench() {
           : "";
   const authorIdentity = useMemo(() => resolveAuthorIdentity(session), [session]);
   const profileSubtitle = authorIdentity.signedIn ? authorIdentity.handle : t("Workspace", "工作区");
+  const selectedPublished = workspace.published.find((item) => item.id === selectedPublishedId) ?? workspace.published[0] ?? null;
   const tenorApiKey = (process.env.NEXT_PUBLIC_TENOR_API_KEY ?? TENOR_DEFAULT_KEY).trim() || TENOR_DEFAULT_KEY;
 
   useEffect(() => {
@@ -3190,51 +3192,16 @@ export function ComposeWorkbench() {
 
           {paneTab === "posted" &&
             workspace.published.map((item) => (
-              <article key={item.id} className="tf-posted-card">
-                <div className="tf-posted-card-head">
-                  <div className="tf-posted-card-info">
-                    {item.draftKind && (
-                      <span className={clsx("tf-kind-badge", `tf-kind-${item.draftKind}`)}>
-                        {draftKindLabel(item.draftKind, locale)}
-                      </span>
-                    )}
-                    <span className="tf-posted-time">{formatDateTime(item.publishedAt)}</span>
-                  </div>
+              <article
+                key={item.id}
+                className={clsx("tf-posted-sidebar-item", selectedPublished?.id === item.id && "active")}
+                onClick={() => setSelectedPublishedId(item.id)}
+              >
+                <div className="tf-posted-sidebar-head">
+                  <span className="tf-posted-time">{formatDateTime(item.publishedAt)}</span>
+                  <svg className="tf-posted-x-icon" viewBox="0 0 24 24" aria-hidden><path d="M22.2 5.7c-.7.3-1.4.5-2.1.6.8-.5 1.3-1.2 1.6-2.1-.7.4-1.6.8-2.4.9a3.6 3.6 0 0 0-6.2 2.5c0 .3 0 .6.1.8a10.2 10.2 0 0 1-7.4-3.7 3.7 3.7 0 0 0-.5 1.8 3.6 3.6 0 0 0 1.6 3c-.6 0-1.1-.2-1.6-.4v.1a3.6 3.6 0 0 0 2.9 3.6c-.3.1-.7.1-1 .1-.2 0-.5 0-.7-.1a3.6 3.6 0 0 0 3.4 2.5A7.2 7.2 0 0 1 4 17a10.2 10.2 0 0 0 5.5 1.6c6.6 0 10.2-5.4 10.2-10.1v-.5c.7-.5 1.3-1.1 1.8-1.8Z"/></svg>
                 </div>
-                <p className="tf-posted-preview">{item.preview}</p>
-                <div className="tf-posted-metrics">
-                  <span title={t("Impressions", "浏览")}>
-                    <svg viewBox="0 0 24 24" aria-hidden><path d="M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zm0 12.5a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
-                    {formatNumber(item.metrics.impressions)}
-                  </span>
-                  <span title={t("Likes", "喜欢")}>
-                    <svg viewBox="0 0 24 24" aria-hidden><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-                    {formatNumber(item.metrics.likes)}
-                  </span>
-                  <span title={t("Reposts", "转发")}>
-                    <svg viewBox="0 0 24 24" aria-hidden><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
-                    {formatNumber(item.metrics.reposts)}
-                  </span>
-                  <span title={t("Replies", "回复")}>
-                    <svg viewBox="0 0 24 24" aria-hidden><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10z"/></svg>
-                    {formatNumber(item.metrics.replies)}
-                  </span>
-                  <span title={t("Bookmarks", "书签")}>
-                    <svg viewBox="0 0 24 24" aria-hidden><path d="M17 3H7a2 2 0 0 0-2 2v16l7-3 7 3V5a2 2 0 0 0-2-2z"/></svg>
-                    {formatNumber(item.metrics.bookmarks)}
-                  </span>
-                </div>
-                <div className="tf-posted-actions">
-                  <button
-                    type="button"
-                    className="tf-btn-vip-analysis"
-                    onClick={() => setNotice(t("VIP feature coming soon.", "VIP 功能即将上线。"))}
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
-                    {t("Analysis", "分析")}
-                    <span className="tf-vip-tag">VIP</span>
-                  </button>
-                </div>
+                <p className="tf-posted-sidebar-preview">{item.preview}</p>
               </article>
             ))}
         </div>
@@ -4354,73 +4321,106 @@ export function ComposeWorkbench() {
 
             {paneTab === "posted" && (
               <div className="tf-posted-main">
-                <div className="tf-posted-summary-bar">
-                  <span>{t("Published", "已发布")} {workspace.published.length} {t("posts", "条")}</span>
-                  <span className="tf-muted-light">
-                    {t("Avg engagement", "平均互动率")} {analytics.avgEngagementRate}%
-                  </span>
-                </div>
-                {workspace.published.length === 0 ? (
+                {!selectedPublished ? (
                   <div className="tf-empty">
                     <p>{t("No published posts yet.", "暂无已发布内容。")}</p>
                   </div>
                 ) : (
-                  <div className="tf-posted-grid">
-                    {workspace.published.map((item) => (
-                      <article key={item.id} className="tf-posted-main-card">
-                        <div className="tf-posted-main-card-head">
-                          {item.draftKind && (
-                            <span className={clsx("tf-kind-badge", `tf-kind-${item.draftKind}`)}>
-                              {draftKindLabel(item.draftKind, locale)}
-                            </span>
-                          )}
-                          <span className="tf-posted-time">{formatDateTime(item.publishedAt)}</span>
-                        </div>
-                        <p className="tf-posted-main-preview">{item.preview}</p>
-                        <div className="tf-posted-metrics-row">
-                          <div className="tf-posted-metric">
-                            <svg viewBox="0 0 24 24" aria-hidden><path d="M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zm0 12.5a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
-                            <strong>{formatNumber(item.metrics.impressions)}</strong>
-                            <small>{t("Views", "浏览")}</small>
-                          </div>
-                          <div className="tf-posted-metric">
-                            <svg viewBox="0 0 24 24" aria-hidden><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-                            <strong>{formatNumber(item.metrics.likes)}</strong>
-                            <small>{t("Likes", "喜欢")}</small>
-                          </div>
-                          <div className="tf-posted-metric">
-                            <svg viewBox="0 0 24 24" aria-hidden><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
-                            <strong>{formatNumber(item.metrics.reposts)}</strong>
-                            <small>{t("Reposts", "转发")}</small>
-                          </div>
-                          <div className="tf-posted-metric">
-                            <svg viewBox="0 0 24 24" aria-hidden><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10z"/></svg>
-                            <strong>{formatNumber(item.metrics.replies)}</strong>
-                            <small>{t("Replies", "回复")}</small>
-                          </div>
-                          <div className="tf-posted-metric">
-                            <svg viewBox="0 0 24 24" aria-hidden><path d="M17 3H7a2 2 0 0 0-2 2v16l7-3 7 3V5a2 2 0 0 0-2-2z"/></svg>
-                            <strong>{formatNumber(item.metrics.bookmarks)}</strong>
-                            <small>{t("Bookmarks", "书签")}</small>
-                          </div>
-                        </div>
-                        <div className="tf-posted-card-foot">
-                          <span className="tf-posted-engagement">
-                            {t("Engagement", "互动率")} {item.metrics.engagementRate}%
-                          </span>
-                          <button
-                            type="button"
-                            className="tf-btn-vip-analysis"
-                            onClick={() => setNotice(t("VIP feature coming soon.", "VIP 功能即将上线。"))}
-                          >
-                            <svg viewBox="0 0 24 24" aria-hidden><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
-                            {t("Analysis", "分析")}
-                            <span className="tf-vip-tag">VIP</span>
-                          </button>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
+                  <>
+                    <div className="tf-posted-topbar">
+                      <div className="tf-posted-topbar-left">
+                        <span className="tf-posted-badge-published">
+                          <svg viewBox="0 0 24 24" aria-hidden><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
+                          {t("Published", "已发布")}
+                        </span>
+                        <span className="tf-posted-on-x">
+                          {t("Published on", "发布于")}
+                          <svg viewBox="0 0 24 24" aria-hidden><path d="M22.2 5.7c-.7.3-1.4.5-2.1.6.8-.5 1.3-1.2 1.6-2.1-.7.4-1.6.8-2.4.9a3.6 3.6 0 0 0-6.2 2.5c0 .3 0 .6.1.8a10.2 10.2 0 0 1-7.4-3.7 3.7 3.7 0 0 0-.5 1.8 3.6 3.6 0 0 0 1.6 3c-.6 0-1.1-.2-1.6-.4v.1a3.6 3.6 0 0 0 2.9 3.6c-.3.1-.7.1-1 .1-.2 0-.5 0-.7-.1a3.6 3.6 0 0 0 3.4 2.5A7.2 7.2 0 0 1 4 17a10.2 10.2 0 0 0 5.5 1.6c6.6 0 10.2-5.4 10.2-10.1v-.5c.7-.5 1.3-1.1 1.8-1.8Z"/></svg>
+                          X
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="tf-btn-vip-analysis"
+                        onClick={() => setNotice(t("VIP feature coming soon.", "VIP 功能即将上线。"))}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden><path d="M12 2L9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61z"/></svg>
+                        {t("Get Analytics", "查看分析")}
+                        <span className="tf-vip-tag">VIP</span>
+                      </button>
+                    </div>
+
+                    <div className="tf-posted-tweet-list">
+                      {selectedPublished.posts.map((post, index) => {
+                        const isThread = selectedPublished.posts.length > 1;
+                        const showThreadLine = isThread && index < selectedPublished.posts.length - 1;
+                        const postText = toLintText(post.text).trim();
+                        return (
+                          <article key={post.id} className="tf-x-post-card">
+                            <div className="tf-x-avatar-wrap">
+                              <div className="tf-x-avatar">
+                                {authorIdentity.image ? (
+                                  <img src={authorIdentity.image} alt={authorIdentity.name} loading="lazy" />
+                                ) : (
+                                  authorIdentity.initial
+                                )}
+                              </div>
+                              {showThreadLine && <span className="tf-x-thread-line" aria-hidden />}
+                            </div>
+                            <div className="tf-x-post-main">
+                              <div className="tf-x-post-head">
+                                <strong>{authorIdentity.name}</strong>
+                                <span>{authorIdentity.handle}</span>
+                                <i aria-hidden>&middot;</i>
+                                <span>{formatDateTime(selectedPublished.publishedAt)}</span>
+                              </div>
+                              <div className="tf-x-post-text">
+                                {postText.split("\n").map((line, lineIndex) => (
+                                  <p key={`${post.id}-${lineIndex}`}>{line || "\u00a0"}</p>
+                                ))}
+                              </div>
+                              {(post.media?.length ?? 0) > 0 && (
+                                <div className="tf-x-post-media">
+                                  {(post.media ?? []).map((media) => (
+                                    <div key={media.id} className="tf-x-media-item">
+                                      {media.url && (media.type === "image" || media.type === "gif") ? (
+                                        <img src={media.url} alt={media.name} loading="lazy" />
+                                      ) : media.url && media.type === "video" ? (
+                                        <video src={media.url} controls preload="metadata" />
+                                      ) : (
+                                        <div className="tf-x-media-placeholder">
+                                          <em>{media.type.toUpperCase()}</em>
+                                          <span>{media.name}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              <div className="tf-x-post-stats">
+                                <button type="button" tabIndex={-1}>
+                                  <svg viewBox="0 0 24 24" aria-hidden><path d="M4 5h16v10H8l-4 4V5z" /></svg>
+                                  <span>{formatNumber(selectedPublished.metrics.replies)}</span>
+                                </button>
+                                <button type="button" tabIndex={-1}>
+                                  <svg viewBox="0 0 24 24" aria-hidden><path d="m4 7 4 4-4 4" /><path d="M8 11h9a3 3 0 0 1 0 6h-2" /><path d="m20 17-4-4 4-4" /><path d="M16 13H7a3 3 0 0 1 0-6h2" /></svg>
+                                  <span>{formatNumber(selectedPublished.metrics.reposts)}</span>
+                                </button>
+                                <button type="button" tabIndex={-1}>
+                                  <svg viewBox="0 0 24 24" aria-hidden><path d="M12 20s-7-4.7-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.3-7 10-7 10Z" /></svg>
+                                  <span>{formatNumber(selectedPublished.metrics.likes)}</span>
+                                </button>
+                                <button type="button" tabIndex={-1}>
+                                  <svg viewBox="0 0 24 24" aria-hidden><path d="M4 18h3V9H4zm6 0h3V5h-3zm6 0h3v-7h-3z" /></svg>
+                                  <span>{formatNumber(selectedPublished.metrics.impressions)}</span>
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
               </div>
             )}
