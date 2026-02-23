@@ -4379,42 +4379,6 @@ export function ComposeWorkbench() {
                                   <p key={`${post.id}-${lineIndex}`}>{line || "\u00a0"}</p>
                                 ))}
                               </div>
-                              {(post.media?.length ?? 0) > 0 && (
-                                <div className="tf-x-post-media">
-                                  {(post.media ?? []).map((media) => (
-                                    <div key={media.id} className="tf-x-media-item">
-                                      {media.url && (media.type === "image" || media.type === "gif") ? (
-                                        <img src={media.url} alt={media.name} loading="lazy" />
-                                      ) : media.url && media.type === "video" ? (
-                                        <video src={media.url} controls preload="metadata" />
-                                      ) : (
-                                        <div className="tf-x-media-placeholder">
-                                          <em>{media.type.toUpperCase()}</em>
-                                          <span>{media.name}</span>
-                                        </div>
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              <div className="tf-x-post-stats">
-                                <button type="button" tabIndex={-1}>
-                                  <svg viewBox="0 0 24 24" aria-hidden><path d="M4 5h16v10H8l-4 4V5z" /></svg>
-                                  <span>{formatNumber(selectedPublished.metrics.replies)}</span>
-                                </button>
-                                <button type="button" tabIndex={-1}>
-                                  <svg viewBox="0 0 24 24" aria-hidden><path d="m4 7 4 4-4 4" /><path d="M8 11h9a3 3 0 0 1 0 6h-2" /><path d="m20 17-4-4 4-4" /><path d="M16 13H7a3 3 0 0 1 0-6h2" /></svg>
-                                  <span>{formatNumber(selectedPublished.metrics.reposts)}</span>
-                                </button>
-                                <button type="button" tabIndex={-1}>
-                                  <svg viewBox="0 0 24 24" aria-hidden><path d="M12 20s-7-4.7-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.3-7 10-7 10Z" /></svg>
-                                  <span>{formatNumber(selectedPublished.metrics.likes)}</span>
-                                </button>
-                                <button type="button" tabIndex={-1}>
-                                  <svg viewBox="0 0 24 24" aria-hidden><path d="M4 18h3V9H4zm6 0h3V5h-3zm6 0h3v-7h-3z" /></svg>
-                                  <span>{formatNumber(selectedPublished.metrics.impressions)}</span>
-                                </button>
-                              </div>
                             </div>
                           </article>
                         );
