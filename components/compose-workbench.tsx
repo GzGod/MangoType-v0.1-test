@@ -38,6 +38,7 @@ import {
   sortQueueAsc,
   WORKSPACE_STORAGE_KEY,
   type DraftKind,
+  type ThreadPost,
   type WorkspaceState
 } from "@/lib/workspace";
 import { computeAnalytics, formatNumber } from "@/lib/dashboard";
@@ -2008,6 +2009,32 @@ export function ComposeWorkbench() {
     }));
   }
 
+  async function persistMediaUrls(posts: ThreadPost[]): Promise<ThreadPost[]> {
+    return Promise.all(
+      posts.map(async (post) => {
+        if (!post.media?.length) return post;
+        const persistedMedia = await Promise.all(
+          post.media.map(async (m) => {
+            if (!m.url || (!m.url.startsWith("blob:") && !m.url.startsWith("data:"))) return m;
+            try {
+              const res = await fetch(m.url, { cache: "no-store" });
+              const blob = await res.blob();
+              return new Promise<typeof m>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve({ ...m, url: reader.result as string });
+                reader.onerror = () => resolve({ ...m, url: undefined });
+                reader.readAsDataURL(blob);
+              });
+            } catch {
+              return { ...m, url: undefined };
+            }
+          })
+        );
+        return { ...post, media: persistedMedia };
+      })
+    );
+  }
+
   async function uploadSingleMediaToX(media: DraftPostMedia): Promise<string> {
     if (!media.url) {
       throw new Error(t("Media source missing.", "媒体源缺失。"));
@@ -2242,7 +2269,8 @@ export function ComposeWorkbench() {
       sourceDraftId: draftId,
       draftKind
     });
-    const published = publishQueueItem(queueItem);
+    const persistedPosts = await persistMediaUrls(queueItem.posts);
+    const published = publishQueueItem({ ...queueItem, posts: persistedPosts });
     updateWorkspace((prev) => {
       const nextDrafts = prev.drafts.length > 1
         ? prev.drafts.filter((draft) => draft.id !== draftId)
@@ -2331,7 +2359,8 @@ export function ComposeWorkbench() {
         await publishPostsToX(item.posts);
         succeeded += 1;
         succeededIds.add(item.id);
-        publishedItems.push(publishQueueItem(attemptedItem));
+        const persistedItem = { ...attemptedItem, posts: await persistMediaUrls(attemptedItem.posts) };
+        publishedItems.push(publishQueueItem(persistedItem));
         activityLogs.push(
           createActivityLog({
             level: "info",
@@ -2468,10 +2497,11 @@ export function ComposeWorkbench() {
       return;
     }
 
+    const persistedScheduled = { ...attemptedItem, posts: await persistMediaUrls(attemptedItem.posts) };
     updateWorkspace((prev) => ({
       ...prev,
       queue: prev.queue.filter((item) => item.id !== id),
-      published: [publishQueueItem(attemptedItem), ...prev.published].sort(sortPublishedDesc),
+      published: [publishQueueItem(persistedScheduled), ...prev.published].sort(sortPublishedDesc),
       activity: appendActivityLogs(prev.activity, [
         createActivityLog({
           level: "info",
@@ -4379,6 +4409,19 @@ export function ComposeWorkbench() {
                                   <p key={`${post.id}-${lineIndex}`}>{line || "\u00a0"}</p>
                                 ))}
                               </div>
+                              {(post.media?.length ?? 0) > 0 && (
+                                <div className="tf-x-post-media">
+                                  {(post.media ?? []).map((media) => (
+                                    <div key={media.id} className="tf-x-media-item">
+                                      {media.url && (media.type === "image" || media.type === "gif") ? (
+                                        <img src={media.url} alt={media.name} loading="lazy" />
+                                      ) : media.url && media.type === "video" ? (
+                                        <video src={media.url} controls preload="metadata" />
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </article>
                         );
