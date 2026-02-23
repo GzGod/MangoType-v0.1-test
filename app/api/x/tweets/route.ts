@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { getToken } from "next-auth/jwt";
 import { authOptions } from "@/lib/auth";
 
 type PublishTweetBody = {
@@ -8,13 +9,23 @@ type PublishTweetBody = {
   mediaIds?: string[];
 };
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.accessToken) {
+  const token = await getToken({
+    req: request,
+    secret: process.env.NEXTAUTH_SECRET ?? process.env.AUTH_SECRET
+  });
+
+  const accessToken =
+    (typeof session?.accessToken === "string" && session.accessToken.trim()) ||
+    (typeof token?.accessToken === "string" && token.accessToken.trim()) ||
+    "";
+
+  if (!accessToken) {
     return NextResponse.json(
       {
         error: "unauthorized",
-        message: "Missing X access token. Sign in with X first."
+        message: "Missing or expired X access token. Sign in with X again."
       },
       { status: 401 }
     );
@@ -61,7 +72,7 @@ export async function POST(request: Request) {
   const response = await fetch("https://api.x.com/2/tweets", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${session.accessToken}`,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body),
@@ -88,4 +99,3 @@ export async function POST(request: Request) {
 
   return NextResponse.json(responseData, { status: 200 });
 }
-

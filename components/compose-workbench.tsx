@@ -1994,6 +1994,7 @@ export function ComposeWorkbench() {
         headers: {
           "Content-Type": "application/json"
         },
+        credentials: "same-origin",
         body: JSON.stringify({
           text: post.text,
           replyToId
@@ -2008,6 +2009,14 @@ export function ComposeWorkbench() {
       }
 
       if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error(
+            t(
+              "X session expired. Please sign in again, then retry publishing.",
+              "X 登录态已失效，请重新登录后再发布。"
+            )
+          );
+        }
         throw new Error(resolveXPublishErrorMessage(payload, response.status, locale));
       }
 

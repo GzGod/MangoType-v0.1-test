@@ -8,6 +8,7 @@ const TWITTER_CLIENT_SECRET =
 const AUTH_SECRET = process.env.NEXTAUTH_SECRET ?? process.env.AUTH_SECRET ?? "";
 const HAS_TWITTER_PROVIDER = Boolean(TWITTER_CLIENT_ID && TWITTER_CLIENT_SECRET);
 const HAS_AUTH_SECRET = Boolean(AUTH_SECRET);
+const REFRESH_SKEW_SECONDS = 60;
 
 export const authConfigState = {
   hasTwitterProvider: HAS_TWITTER_PROVIDER,
@@ -18,15 +19,94 @@ function withTwitterAuth(token: JWT, account?: { [key: string]: unknown }) {
   if (!account) {
     return token;
   }
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const expiresAtFromProvider =
+    typeof account.expires_at === "number"
+      ? account.expires_at
+      : typeof account.expires_in === "number"
+        ? nowSeconds + account.expires_in
+        : token.expiresAt;
   return {
     ...token,
     accessToken:
       typeof account.access_token === "string" ? account.access_token : token.accessToken,
     refreshToken:
       typeof account.refresh_token === "string" ? account.refresh_token : token.refreshToken,
-    expiresAt:
-      typeof account.expires_at === "number" ? account.expires_at : token.expiresAt
+    expiresAt: expiresAtFromProvider,
+    error: null
   };
+}
+
+async function refreshTwitterAccessToken(token: JWT): Promise<JWT> {
+  if (!HAS_TWITTER_PROVIDER) {
+    return {
+      ...token,
+      error: "MissingTwitterProviderConfig"
+    };
+  }
+
+  const refreshToken = typeof token.refreshToken === "string" ? token.refreshToken : "";
+  if (!refreshToken) {
+    return {
+      ...token,
+      error: "MissingRefreshToken"
+    };
+  }
+
+  try {
+    const params = new URLSearchParams();
+    params.set("grant_type", "refresh_token");
+    params.set("refresh_token", refreshToken);
+    params.set("client_id", TWITTER_CLIENT_ID);
+
+    const basicAuth = Buffer.from(`${TWITTER_CLIENT_ID}:${TWITTER_CLIENT_SECRET}`).toString(
+      "base64"
+    );
+
+    const response = await fetch("https://api.x.com/2/oauth2/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: params.toString(),
+      cache: "no-store"
+    });
+
+    if (!response.ok) {
+      throw new Error(`refresh_failed_${response.status}`);
+    }
+
+    const payload = (await response.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+
+    if (typeof payload.access_token !== "string" || !payload.access_token.trim()) {
+      throw new Error("refresh_missing_access_token");
+    }
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    return {
+      ...token,
+      accessToken: payload.access_token,
+      refreshToken:
+        typeof payload.refresh_token === "string" && payload.refresh_token.trim()
+          ? payload.refresh_token
+          : token.refreshToken,
+      expiresAt:
+        typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in)
+          ? nowSeconds + Math.max(1, Math.floor(payload.expires_in))
+          : token.expiresAt,
+      error: null
+    };
+  } catch {
+    return {
+      ...token,
+      error: "RefreshAccessTokenError"
+    };
+  }
 }
 
 export const authOptions: NextAuthOptions = {
@@ -60,7 +140,22 @@ export const authOptions: NextAuthOptions = {
     : [],
   callbacks: {
     async jwt({ token, account, profile }) {
-      const nextToken = withTwitterAuth(token, account as { [key: string]: unknown } | undefined);
+      let nextToken = withTwitterAuth(
+        token,
+        account as { [key: string]: unknown } | undefined
+      );
+
+      if (!account) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const expiresAt =
+          typeof nextToken.expiresAt === "number" && Number.isFinite(nextToken.expiresAt)
+            ? nextToken.expiresAt
+            : null;
+        if (expiresAt && expiresAt <= nowSeconds + REFRESH_SKEW_SECONDS) {
+          nextToken = await refreshTwitterAccessToken(nextToken);
+        }
+      }
+
       const profileUsername =
         (profile as { data?: { username?: string } } | undefined)?.data?.username ?? null;
       const username =
@@ -81,6 +176,7 @@ export const authOptions: NextAuthOptions = {
       session.accessToken = typeof token.accessToken === "string" ? token.accessToken : null;
       session.refreshToken = typeof token.refreshToken === "string" ? token.refreshToken : null;
       session.expiresAt = typeof token.expiresAt === "number" ? token.expiresAt : null;
+      session.error = typeof token.error === "string" ? token.error : null;
       return session;
     }
   }
