@@ -2790,6 +2790,18 @@ select:focus-visible,
   background: #f7fafc;
   overflow: hidden;
   min-width: 0;
+  cursor: grab;
+  transition: opacity 0.15s, box-shadow 0.15s;
+}
+.tf-media-card:active {
+  cursor: grabbing;
+}
+.tf-media-card.is-dragging {
+  opacity: 0.35;
+  box-shadow: 0 0 0 2px #a78bfa;
+}
+.tf-post-body.is-drop-target {
+  transition: box-shadow 0.15s;
 }
 
 .tf-media-preview {

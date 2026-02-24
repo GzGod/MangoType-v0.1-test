@@ -12,8 +12,8 @@ export function getXCount(text: string): XCountResult {
   const weightedLength = parsed.weightedLength;
   return {
     weightedLength,
-    remaining: 280 - weightedLength,
-    valid: parsed.valid,
+    remaining: 25000 - weightedLength,
+    valid: weightedLength <= 25000,
     permillage: parsed.permillage
   };
 }

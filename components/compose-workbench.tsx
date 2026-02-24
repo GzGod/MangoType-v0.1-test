@@ -157,7 +157,7 @@ const DRAFT_OPTIONS: Array<{
   {
     kind: "tweet",
     title: "Tweet",
-    description: "Single post, 280-char focused."
+    description: "Single post."
   },
   {
     kind: "thread",
@@ -294,7 +294,7 @@ function draftKindLabel(kind: DraftKind, locale: UiLocale): string {
 function draftOptionCopy(kind: DraftKind, locale: UiLocale): { title: string; description: string } {
   if (locale === "zh") {
     if (kind === "tweet") {
-      return { title: "推文", description: "单条发布，280 字限制。" };
+      return { title: "推文", description: "单条发布。" };
     }
     if (kind === "thread") {
       return { title: "线程", description: "多条连续发布，适合展开表达。" };
@@ -470,6 +470,7 @@ export function ComposeWorkbench() {
   const [gifLoading, setGifLoading] = useState(false);
   const [gifError, setGifError] = useState("");
   const [previewMobile, setPreviewMobile] = useState(false);
+  const [dragMedia, setDragMedia] = useState<{ postId: string; mediaId: string } | null>(null);
   const [draftHistory, setDraftHistory] = useState<Record<string, DraftSnapshot[]>>({});
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [authConfig, setAuthConfig] = useState({
@@ -1069,7 +1070,7 @@ export function ComposeWorkbench() {
         (sum, post) => sum + (countByPost[post.id]?.weightedLength ?? 0),
         0
       );
-      const hardLimit = draft.kind === "article" ? 1800 : Math.max(280, draft.posts.length * 280);
+      const hardLimit = draft.kind === "article" ? 1800 : Math.max(25000, draft.posts.length * 25000);
       const usageRatio = Math.max(0, Math.min(1.35, weightedChars / hardLimit));
       const overLimit = draft.posts.some((post) => !(countByPost[post.id]?.valid ?? true));
       return {
@@ -1738,7 +1739,16 @@ export function ComposeWorkbench() {
       event.target.value = "";
       return;
     }
-    const mediaItems = files.map((file) => ({
+    const targetPost = currentDraft?.posts.find((post) => post.id === postId);
+    const existingCount = targetPost?.media?.length ?? 0;
+    const remaining = Math.max(0, 4 - existingCount);
+    if (remaining === 0) {
+      event.target.value = "";
+      setNotice(t("Max 4 media per tweet.", "每条推文最多 4 个媒体文件。"));
+      return;
+    }
+    const accepted = files.slice(0, remaining);
+    const mediaItems = accepted.map((file) => ({
       id: createId(),
       type: file.type.startsWith("video/")
         ? ("video" as const)
@@ -1765,11 +1775,15 @@ export function ComposeWorkbench() {
     setTargetUploadPostId(null);
     setMediaMenuPostId(null);
     event.target.value = "";
-    setNotice(
-      locale === "zh"
-        ? `已附加 ${files.length} 个文件。`
-        : `Attached ${files.length} file${files.length > 1 ? "s" : ""}.`
-    );
+    const dropped = files.length - accepted.length;
+    const msg = dropped > 0
+      ? locale === "zh"
+        ? `已附加 ${accepted.length} 个文件（${dropped} 个超出限制已忽略）。`
+        : `Attached ${accepted.length} file${accepted.length > 1 ? "s" : ""} (${dropped} skipped, max 4).`
+      : locale === "zh"
+        ? `已附加 ${accepted.length} 个文件。`
+        : `Attached ${accepted.length} file${accepted.length > 1 ? "s" : ""}.`;
+    setNotice(msg);
   }
 
   function removeMedia(postId: string, mediaId: string) {
@@ -1790,6 +1804,44 @@ export function ComposeWorkbench() {
           : post
       )
     }));
+  }
+
+  function handleMediaDragStart(postId: string, mediaId: string) {
+    setDragMedia({ postId, mediaId });
+  }
+
+  function handleMediaDrop(targetPostId: string, targetIndex: number) {
+    if (!dragMedia) return;
+    const { postId: srcPostId, mediaId: srcMediaId } = dragMedia;
+    setDragMedia(null);
+    updateCurrentDraft((draft) => {
+      const srcPost = draft.posts.find((p) => p.id === srcPostId);
+      const item = srcPost?.media?.find((m) => m.id === srcMediaId);
+      if (!item) return draft;
+      const targetPost = draft.posts.find((p) => p.id === targetPostId);
+      if (targetPost && (targetPost.media?.length ?? 0) >= 4 && srcPostId !== targetPostId) {
+        return draft;
+      }
+      return {
+        ...draft,
+        posts: draft.posts.map((post) => {
+          if (post.id === srcPostId && post.id === targetPostId) {
+            const without = (post.media ?? []).filter((m) => m.id !== srcMediaId);
+            const idx = Math.min(targetIndex, without.length);
+            return { ...post, media: [...without.slice(0, idx), item, ...without.slice(idx)] };
+          }
+          if (post.id === srcPostId) {
+            return { ...post, media: (post.media ?? []).filter((m) => m.id !== srcMediaId) };
+          }
+          if (post.id === targetPostId) {
+            const existing = post.media ?? [];
+            const idx = Math.min(targetIndex, existing.length);
+            return { ...post, media: [...existing.slice(0, idx), item, ...existing.slice(idx)] };
+          }
+          return post;
+        })
+      };
+    });
   }
 
   function getEditorForPost(postId: string): HTMLDivElement | null {
@@ -2191,7 +2243,7 @@ export function ComposeWorkbench() {
     }
     if (!publishReady) {
       setPublishState("blocked");
-      setNotice(t("One or more posts exceed 280 chars.", "有内容超过 280 字符限制。"));
+      setNotice(t("One or more posts exceed the character limit.", "有内容超过字符限制。"));
       return;
     }
     setPublishState("scheduling");
@@ -2235,7 +2287,7 @@ export function ComposeWorkbench() {
     }
     if (!publishReady) {
       setPublishState("blocked");
-      setNotice(t("One or more posts exceed 280 chars.", "有内容超过 280 字符限制。"));
+      setNotice(t("One or more posts exceed the character limit.", "有内容超过字符限制。"));
       return;
     }
     setPublishState("publishing");
@@ -3681,8 +3733,11 @@ export function ComposeWorkbench() {
                           className={clsx(
                             "tf-post-body",
                             currentDraft.selectedPostId === post.id ? "active" : "dimmed",
-                            (issuesByPost[post.id]?.length ?? 0) > 0 && "has-issues"
+                            (issuesByPost[post.id]?.length ?? 0) > 0 && "has-issues",
+                            dragMedia && "is-drop-target"
                           )}
+                          onDragOver={(e) => { if (dragMedia) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
+                          onDrop={(e) => { if (dragMedia) { e.preventDefault(); handleMediaDrop(post.id, post.media?.length ?? 0); } }}
                         >
                           <div className="tf-post-head">
                             <span className="name">{authorIdentity.name}</span>
@@ -3699,12 +3754,24 @@ export function ComposeWorkbench() {
                             }}
                           />
                           {(post.media?.length ?? 0) > 0 && (
-                            <div className="tf-media-row">
-                              {(post.media ?? []).map((media) => (
-                                <article key={media.id} className="tf-media-card">
+                            <div
+                              className="tf-media-row"
+                              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+                              onDrop={(e) => { e.preventDefault(); handleMediaDrop(post.id, post.media?.length ?? 0); }}
+                            >
+                              {(post.media ?? []).map((media, mediaIdx) => (
+                                <article
+                                  key={media.id}
+                                  className={clsx("tf-media-card", dragMedia?.mediaId === media.id && "is-dragging")}
+                                  draggable
+                                  onDragStart={() => handleMediaDragStart(post.id, media.id)}
+                                  onDragEnd={() => setDragMedia(null)}
+                                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                  onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleMediaDrop(post.id, mediaIdx); }}
+                                >
                                   <div className="tf-media-preview">
                                     {media.url && (media.type === "image" || media.type === "gif") ? (
-                                      <img src={media.url} alt={media.name} loading="lazy" />
+                                      <img src={media.url} alt={media.name} loading="lazy" draggable={false} />
                                     ) : media.url && media.type === "video" ? (
                                       <video src={media.url} controls preload="metadata" />
                                     ) : (
@@ -3747,8 +3814,8 @@ export function ComposeWorkbench() {
                               onClick={() => selectPost(post.id)}
                               aria-label={
                                 locale === "zh"
-                                  ? `定位到第 ${index + 1} 条。已使用 ${countByPost[post.id]?.weightedLength ?? 0}/280 字符。`
-                                  : `Focus post #${index + 1}. ${countByPost[post.id]?.weightedLength ?? 0} of 280 characters used.`
+                                  ? `定位到第 ${index + 1} 条。已使用 ${countByPost[post.id]?.weightedLength ?? 0} 字符。`
+                                  : `Focus post #${index + 1}. ${countByPost[post.id]?.weightedLength ?? 0} characters used.`
                               }
                             >
                               <span
@@ -3760,7 +3827,7 @@ export function ComposeWorkbench() {
                                 o
                               </span>
                               <span className="tf-tool-tip tf-tool-count">
-                                {countByPost[post.id]?.weightedLength ?? 0}/280
+                                {countByPost[post.id]?.weightedLength ?? 0}
                               </span>
                             </button>
 
@@ -3989,7 +4056,7 @@ export function ComposeWorkbench() {
                       <span
                         className={clsx("count", countByPost[currentPost.id]?.valid ? "ok" : "warn")}
                       >
-                        {countByPost[currentPost.id]?.weightedLength ?? 0}/280
+                        {countByPost[currentPost.id]?.weightedLength ?? 0}
                       </span>
                     </div>
                     <RichEditor
@@ -4003,12 +4070,24 @@ export function ComposeWorkbench() {
                       }}
                     />
                     {(currentPost.media?.length ?? 0) > 0 && (
-                      <div className="tf-media-row">
-                        {(currentPost.media ?? []).map((media) => (
-                          <article key={media.id} className="tf-media-card">
+                      <div
+                        className="tf-media-row"
+                        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+                        onDrop={(e) => { e.preventDefault(); handleMediaDrop(currentPost.id, currentPost.media?.length ?? 0); }}
+                      >
+                        {(currentPost.media ?? []).map((media, mediaIdx) => (
+                          <article
+                            key={media.id}
+                            className={clsx("tf-media-card", dragMedia?.mediaId === media.id && "is-dragging")}
+                            draggable
+                            onDragStart={() => handleMediaDragStart(currentPost.id, media.id)}
+                            onDragEnd={() => setDragMedia(null)}
+                            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleMediaDrop(currentPost.id, mediaIdx); }}
+                          >
                             <div className="tf-media-preview">
                               {media.url && (media.type === "image" || media.type === "gif") ? (
-                                <img src={media.url} alt={media.name} loading="lazy" />
+                                <img src={media.url} alt={media.name} loading="lazy" draggable={false} />
                               ) : media.url && media.type === "video" ? (
                                 <video src={media.url} controls preload="metadata" />
                               ) : (
@@ -4172,12 +4251,24 @@ export function ComposeWorkbench() {
                       }}
                     />
                     {(currentPost.media?.length ?? 0) > 0 && (
-                      <div className="tf-media-row">
-                        {(currentPost.media ?? []).map((media) => (
-                          <article key={media.id} className="tf-media-card">
+                      <div
+                        className="tf-media-row"
+                        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+                        onDrop={(e) => { e.preventDefault(); handleMediaDrop(currentPost.id, currentPost.media?.length ?? 0); }}
+                      >
+                        {(currentPost.media ?? []).map((media, mediaIdx) => (
+                          <article
+                            key={media.id}
+                            className={clsx("tf-media-card", dragMedia?.mediaId === media.id && "is-dragging")}
+                            draggable
+                            onDragStart={() => handleMediaDragStart(currentPost.id, media.id)}
+                            onDragEnd={() => setDragMedia(null)}
+                            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleMediaDrop(currentPost.id, mediaIdx); }}
+                          >
                             <div className="tf-media-preview">
                               {media.url && (media.type === "image" || media.type === "gif") ? (
-                                <img src={media.url} alt={media.name} loading="lazy" />
+                                <img src={media.url} alt={media.name} loading="lazy" draggable={false} />
                               ) : media.url && media.type === "video" ? (
                                 <video src={media.url} controls preload="metadata" />
                               ) : (
