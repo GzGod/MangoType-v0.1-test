@@ -1806,6 +1806,45 @@ export function ComposeWorkbench() {
     }));
   }
 
+  function handleEditorFileDrop(postId: string, files: File[]) {
+    const targetPost = currentDraft?.posts.find((p) => p.id === postId);
+    const existingCount = targetPost?.media?.length ?? 0;
+    const remaining = Math.max(0, 4 - existingCount);
+    if (remaining === 0) {
+      setNotice(t("Max 4 media per tweet.", "每条推文最多 4 个媒体文件。"));
+      return;
+    }
+    const accepted = files.slice(0, remaining);
+    const mediaItems = accepted.map((file) => ({
+      id: createId(),
+      type: file.type.startsWith("video/")
+        ? ("video" as const)
+        : file.type === "image/gif"
+          ? ("gif" as const)
+          : ("image" as const),
+      name: file.name,
+      url: URL.createObjectURL(file)
+    }));
+    updateCurrentDraft((draft) => ({
+      ...draft,
+      posts: draft.posts.map((post) =>
+        post.id === postId
+          ? { ...post, media: [...(post.media ?? []), ...mediaItems] }
+          : post
+      )
+    }));
+    const dropped = files.length - accepted.length;
+    setNotice(
+      dropped > 0
+        ? locale === "zh"
+          ? `已附加 ${accepted.length} 个文件（${dropped} 个超出限制已忽略）。`
+          : `Attached ${accepted.length} file${accepted.length > 1 ? "s" : ""} (${dropped} skipped, max 4).`
+        : locale === "zh"
+          ? `已附加 ${accepted.length} 个文件。`
+          : `Attached ${accepted.length} file${accepted.length > 1 ? "s" : ""}.`
+    );
+  }
+
   function handleMediaDragStart(postId: string, mediaId: string) {
     setDragMedia({ postId, mediaId });
   }
@@ -3752,6 +3791,7 @@ export function ComposeWorkbench() {
                             bindRef={(element) => {
                               editorRefs.current[post.id] = element;
                             }}
+                            onFileDrop={(files) => handleEditorFileDrop(post.id, files)}
                           />
                           {(post.media?.length ?? 0) > 0 && (
                             <div
@@ -4068,6 +4108,7 @@ export function ComposeWorkbench() {
                       bindRef={(element) => {
                         editorRefs.current[currentPost.id] = element;
                       }}
+                      onFileDrop={(files) => handleEditorFileDrop(currentPost.id, files)}
                     />
                     {(currentPost.media?.length ?? 0) > 0 && (
                       <div
@@ -4249,6 +4290,7 @@ export function ComposeWorkbench() {
                       bindRef={(element) => {
                         editorRefs.current[currentPost.id] = element;
                       }}
+                      onFileDrop={(files) => handleEditorFileDrop(currentPost.id, files)}
                     />
                     {(currentPost.media?.length ?? 0) > 0 && (
                       <div
@@ -5244,7 +5286,8 @@ function RichEditor({
   locale,
   onChange,
   onFocus,
-  bindRef
+  bindRef,
+  onFileDrop
 }: {
   value: string;
   variant: DraftKind;
@@ -5252,6 +5295,7 @@ function RichEditor({
   onChange: (next: string) => void;
   onFocus: () => void;
   bindRef: (el: HTMLDivElement | null) => void;
+  onFileDrop?: (files: File[]) => void;
 }) {
   const internalRef = useRef<HTMLDivElement | null>(null);
   const editorAriaLabel =
@@ -5294,6 +5338,21 @@ function RichEditor({
       onFocus={onFocus}
       onInput={(event) => onChange(normalizeRichHtml(event.currentTarget.innerHTML))}
       onBlur={(event) => onChange(normalizeRichHtml(event.currentTarget.innerHTML))}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files")) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDrop={(event) => {
+        const files = Array.from(event.dataTransfer.files).filter(
+          (f) => f.type.startsWith("image/") || f.type.startsWith("video/")
+        );
+        if (files.length > 0 && onFileDrop) {
+          event.preventDefault();
+          onFileDrop(files);
+        }
+      }}
     />
   );
 }
