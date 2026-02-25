@@ -18,7 +18,10 @@ import {
   toArticleDocument,
   toArticleHtmlDocument,
   toLintText,
-  toTweetText
+  toTweetText,
+  extractInlineImages,
+  stripInlineImages,
+  buildInlineImgTag
 } from "@/lib/formatting";
 import {
   appendActivityLogs,
@@ -1806,45 +1809,6 @@ export function ComposeWorkbench() {
     }));
   }
 
-  function handleEditorFileDrop(postId: string, files: File[]) {
-    const targetPost = currentDraft?.posts.find((p) => p.id === postId);
-    const existingCount = targetPost?.media?.length ?? 0;
-    const remaining = Math.max(0, 4 - existingCount);
-    if (remaining === 0) {
-      setNotice(t("Max 4 media per tweet.", "每条推文最多 4 个媒体文件。"));
-      return;
-    }
-    const accepted = files.slice(0, remaining);
-    const mediaItems = accepted.map((file) => ({
-      id: createId(),
-      type: file.type.startsWith("video/")
-        ? ("video" as const)
-        : file.type === "image/gif"
-          ? ("gif" as const)
-          : ("image" as const),
-      name: file.name,
-      url: URL.createObjectURL(file)
-    }));
-    updateCurrentDraft((draft) => ({
-      ...draft,
-      posts: draft.posts.map((post) =>
-        post.id === postId
-          ? { ...post, media: [...(post.media ?? []), ...mediaItems] }
-          : post
-      )
-    }));
-    const dropped = files.length - accepted.length;
-    setNotice(
-      dropped > 0
-        ? locale === "zh"
-          ? `已附加 ${accepted.length} 个文件（${dropped} 个超出限制已忽略）。`
-          : `Attached ${accepted.length} file${accepted.length > 1 ? "s" : ""} (${dropped} skipped, max 4).`
-        : locale === "zh"
-          ? `已附加 ${accepted.length} 个文件。`
-          : `Attached ${accepted.length} file${accepted.length > 1 ? "s" : ""}.`
-    );
-  }
-
   function handleMediaDragStart(postId: string, mediaId: string) {
     setDragMedia({ postId, mediaId });
   }
@@ -2094,10 +2058,25 @@ export function ComposeWorkbench() {
     if (!currentDraft) {
       return [];
     }
-    return currentDraft.posts.map((post) => ({
-      ...post,
-      text: toTweetText(post.text, workspace.tweetFormatMode)
-    }));
+    return currentDraft.posts.map((post) => {
+      const inlineImages = extractInlineImages(post.text);
+      const inlineMedia = inlineImages.map((img) => ({
+        id: img.id || createId(),
+        type: img.type,
+        name: img.name,
+        url: img.url
+      }));
+      const existingMedia = (post.media ?? []).filter(
+        (m) => !inlineImages.some((img) => img.id === m.id)
+      );
+      const allMedia = [...inlineMedia, ...existingMedia].slice(0, 4);
+      const cleanHtml = stripInlineImages(post.text);
+      return {
+        ...post,
+        text: toTweetText(cleanHtml, workspace.tweetFormatMode),
+        media: allMedia
+      };
+    });
   }
 
   async function persistMediaUrls(posts: ThreadPost[]): Promise<ThreadPost[]> {
@@ -3791,7 +3770,6 @@ export function ComposeWorkbench() {
                             bindRef={(element) => {
                               editorRefs.current[post.id] = element;
                             }}
-                            onFileDrop={(files) => handleEditorFileDrop(post.id, files)}
                           />
                           {(post.media?.length ?? 0) > 0 && (
                             <div
@@ -4108,7 +4086,6 @@ export function ComposeWorkbench() {
                       bindRef={(element) => {
                         editorRefs.current[currentPost.id] = element;
                       }}
-                      onFileDrop={(files) => handleEditorFileDrop(currentPost.id, files)}
                     />
                     {(currentPost.media?.length ?? 0) > 0 && (
                       <div
@@ -4290,7 +4267,6 @@ export function ComposeWorkbench() {
                       bindRef={(element) => {
                         editorRefs.current[currentPost.id] = element;
                       }}
-                      onFileDrop={(files) => handleEditorFileDrop(currentPost.id, files)}
                     />
                     {(currentPost.media?.length ?? 0) > 0 && (
                       <div
@@ -5286,8 +5262,7 @@ function RichEditor({
   locale,
   onChange,
   onFocus,
-  bindRef,
-  onFileDrop
+  bindRef
 }: {
   value: string;
   variant: DraftKind;
@@ -5295,7 +5270,6 @@ function RichEditor({
   onChange: (next: string) => void;
   onFocus: () => void;
   bindRef: (el: HTMLDivElement | null) => void;
-  onFileDrop?: (files: File[]) => void;
 }) {
   const internalRef = useRef<HTMLDivElement | null>(null);
   const editorAriaLabel =
@@ -5339,18 +5313,46 @@ function RichEditor({
       onInput={(event) => onChange(normalizeRichHtml(event.currentTarget.innerHTML))}
       onBlur={(event) => onChange(normalizeRichHtml(event.currentTarget.innerHTML))}
       onDragOver={(event) => {
-        if (event.dataTransfer.types.includes("Files")) {
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
-        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = event.dataTransfer.types.includes("Files") ? "copy" : "move";
       }}
       onDrop={(event) => {
+        const editor = internalRef.current;
+        if (!editor) return;
         const files = Array.from(event.dataTransfer.files).filter(
           (f) => f.type.startsWith("image/") || f.type.startsWith("video/")
         );
-        if (files.length > 0 && onFileDrop) {
+        if (files.length > 0) {
           event.preventDefault();
-          onFileDrop(files);
+          const existing = editor.querySelectorAll("img.tf-inline-img").length;
+          const remaining = Math.max(0, 4 - existing);
+          const accepted = files.slice(0, remaining);
+          if (accepted.length === 0) return;
+          let insertHtml = "";
+          for (const file of accepted) {
+            const url = URL.createObjectURL(file);
+            const id = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const type = file.type.startsWith("video/") ? "video" : file.type === "image/gif" ? "gif" : "image";
+            insertHtml += `<p>${buildInlineImgTag(url, id, file.name, type)}</p>`;
+          }
+          const sel = window.getSelection();
+          if (sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode)) {
+            const range = sel.getRangeAt(0);
+            range.deleteContents();
+            const temp = document.createElement("div");
+            temp.innerHTML = insertHtml;
+            const frag = document.createDocumentFragment();
+            while (temp.firstChild) frag.appendChild(temp.firstChild);
+            range.insertNode(frag);
+          } else {
+            editor.insertAdjacentHTML("beforeend", insertHtml);
+          }
+          onChange(normalizeRichHtml(editor.innerHTML));
+          return;
+        }
+        const imgSrc = event.dataTransfer.getData("text/plain");
+        if (imgSrc && imgSrc.startsWith("blob:")) {
+          event.preventDefault();
         }
       }}
     />

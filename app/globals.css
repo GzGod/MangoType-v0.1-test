@@ -2804,6 +2804,29 @@ select:focus-visible,
   transition: box-shadow 0.15s;
 }
 
+/* ── Inline images in editor ── */
+.tf-inline-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid #d7deea;
+  margin: 6px 0;
+  cursor: grab;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.tf-inline-img:hover {
+  border-color: #b8cce7;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.1);
+}
+.tf-inline-img:active {
+  cursor: grabbing;
+}
+.tf-rich-editor .tf-inline-img {
+  max-height: 320px;
+  object-fit: contain;
+}
+
 .tf-media-preview {
   aspect-ratio: 16 / 10;
   background: #e9f0f6;

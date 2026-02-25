@@ -83,6 +83,43 @@ export function toRichHtml(input: string): string {
   return normalizeRichHtml(result.join(""));
 }
 
+export interface InlineMedia {
+  id: string;
+  type: "image" | "video" | "gif";
+  name: string;
+  url: string;
+}
+
+export function extractInlineImages(html: string): InlineMedia[] {
+  if (typeof window === "undefined") return [];
+  const container = window.document.createElement("div");
+  container.innerHTML = html;
+  const images: InlineMedia[] = [];
+  container.querySelectorAll("img").forEach((img) => {
+    const src = img.getAttribute("src") ?? "";
+    if (!src) return;
+    images.push({
+      id: img.getAttribute("data-media-id") ?? "",
+      type: (img.getAttribute("data-media-type") as InlineMedia["type"]) ?? "image",
+      name: img.getAttribute("data-media-name") ?? "image",
+      url: src
+    });
+  });
+  return images;
+}
+
+export function stripInlineImages(html: string): string {
+  if (typeof window === "undefined") return html;
+  const container = window.document.createElement("div");
+  container.innerHTML = html;
+  container.querySelectorAll("img").forEach((img) => img.remove());
+  return container.innerHTML || "<p><br></p>";
+}
+
+export function buildInlineImgTag(src: string, id: string, name: string, type: string): string {
+  return `<img src="${src}" data-media-id="${id}" data-media-name="${name}" data-media-type="${type}" draggable="true" class="tf-inline-img">`;
+}
+
 export function normalizeRichHtml(input: string): string {
   if (!input.trim()) {
     return "<p><br></p>";
@@ -429,7 +466,8 @@ function sanitizeNode(root: HTMLElement): void {
     "ul",
     "ol",
     "li",
-    "div"
+    "div",
+    "img"
   ]);
 
   Array.from(root.querySelectorAll("*")).forEach((element) => {
@@ -437,6 +475,20 @@ function sanitizeNode(root: HTMLElement): void {
     if (!allowed.has(tag)) {
       const text = window.document.createTextNode(element.textContent ?? "");
       element.replaceWith(text);
+      return;
+    }
+    if (tag === "img") {
+      const src = element.getAttribute("src") ?? "";
+      const mediaId = element.getAttribute("data-media-id") ?? "";
+      const mediaName = element.getAttribute("data-media-name") ?? "";
+      const mediaType = element.getAttribute("data-media-type") ?? "image";
+      Array.from(element.attributes).forEach((attr) => element.removeAttribute(attr.name));
+      if (src) element.setAttribute("src", src);
+      if (mediaId) element.setAttribute("data-media-id", mediaId);
+      if (mediaName) element.setAttribute("data-media-name", mediaName);
+      if (mediaType) element.setAttribute("data-media-type", mediaType);
+      element.setAttribute("draggable", "true");
+      element.setAttribute("class", "tf-inline-img");
       return;
     }
     Array.from(element.attributes).forEach((attribute) => {
