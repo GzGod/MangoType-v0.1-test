@@ -1979,10 +1979,14 @@ export function ComposeWorkbench() {
     }
     updateCurrentDraft((draft) => ({
       ...draft,
-      posts: draft.posts.map((post) => ({
-        ...post,
-        text: toRichHtml(applyAllFixes(toLintText(post.text), workspace.ruleState, whitelistTerms))
-      }))
+      posts: draft.posts.map((post) => {
+        const inlineImgs = extractInlineImages(post.text);
+        const cleanHtml = stripInlineImages(post.text);
+        const fixedText = toRichHtml(applyAllFixes(toLintText(cleanHtml), workspace.ruleState, whitelistTerms));
+        if (inlineImgs.length === 0) return { ...post, text: fixedText };
+        const imgTags = inlineImgs.map((img) => `<p>${buildInlineImgTag(img.url, img.id, img.name, img.type)}</p>`).join("");
+        return { ...post, text: normalizeRichHtml(fixedText + imgTags) };
+      })
     }));
     setNotice(t("Applied spacing and punctuation fixes.", "已应用间距与标点修复。"));
   }
@@ -1992,13 +1996,21 @@ export function ComposeWorkbench() {
     if (!targetPost) {
       return;
     }
-    const lintSource = toLintText(targetPost.text);
+    const inlineImgs = extractInlineImages(targetPost.text);
+    const cleanHtml = stripInlineImages(targetPost.text);
+    const lintSource = toLintText(cleanHtml);
     const fixed = applyRuleFix(lintSource, issue.ruleId, whitelistTerms);
     if (fixed === lintSource) {
       setNotice(t("No auto-fix change for this issue.", "该问题当前没有可自动修复内容。"));
       return;
     }
-    updatePostHtml(postId, toRichHtml(fixed));
+    const fixedHtml = toRichHtml(fixed);
+    if (inlineImgs.length === 0) {
+      updatePostHtml(postId, fixedHtml);
+    } else {
+      const imgTags = inlineImgs.map((img) => `<p>${buildInlineImgTag(img.url, img.id, img.name, img.type)}</p>`).join("");
+      updatePostHtml(postId, normalizeRichHtml(fixedHtml + imgTags));
+    }
     setNotice(locale === "zh" ? `${issue.ruleId} 已修复。` : `${issue.ruleId} fixed.`);
   }
 
