@@ -2269,7 +2269,7 @@ export function ComposeWorkbench() {
         ...post,
         text: toTweetText(post.text, workspace.tweetFormatMode).trim()
       }))
-      .filter((post) => post.text.length > 0);
+      .filter((post) => post.text.length > 0 || (post.media?.length ?? 0) > 0);
 
     if (publishablePosts.length === 0) {
       throw new Error(t("No publishable text in this draft.", "当前草稿没有可发布内容。"));
