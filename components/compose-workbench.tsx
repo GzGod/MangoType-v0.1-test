@@ -1712,25 +1712,41 @@ export function ComposeWorkbench() {
   }
 
   function insertGifToPost(postId: string, gif: TenorGifTile) {
-    updateCurrentDraft((draft) => ({
-      ...draft,
-      posts: draft.posts.map((post) =>
-        post.id === postId
-          ? {
-              ...post,
-              media: [
-                ...(post.media ?? []),
-                {
-                  id: createId(),
-                  type: "gif",
-                  name: gif.title,
-                  url: gif.gifUrl
-                }
-              ]
-            }
-          : post
-      )
-    }));
+    const editor = editorRefs.current[postId];
+    if (editor) {
+      const existing = editor.querySelectorAll("img.tf-inline-img").length;
+      const mediaCount = currentDraft?.posts.find((p) => p.id === postId)?.media?.length ?? 0;
+      if (existing + mediaCount >= 4) {
+        closeGifPicker();
+        setNotice(t("Max 4 media per tweet.", "每条推文最多 4 个媒体文件。"));
+        return;
+      }
+      const id = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const imgTag = `<p>${buildInlineImgTag(gif.gifUrl, id, gif.title, "gif")}</p>`;
+      editor.insertAdjacentHTML("beforeend", imgTag);
+      const postText = normalizeRichHtml(editor.innerHTML);
+      updateCurrentDraft((draft) => ({
+        ...draft,
+        posts: draft.posts.map((post) =>
+          post.id === postId ? { ...post, text: postText } : post
+        )
+      }));
+    } else {
+      updateCurrentDraft((draft) => ({
+        ...draft,
+        posts: draft.posts.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                media: [
+                  ...(post.media ?? []),
+                  { id: createId(), type: "gif", name: gif.title, url: gif.gifUrl }
+                ]
+              }
+            : post
+        )
+      }));
+    }
     closeGifPicker();
     setNotice(t("GIF added.", "已添加 GIF。"));
   }
@@ -1743,38 +1759,55 @@ export function ComposeWorkbench() {
       return;
     }
     const targetPost = currentDraft?.posts.find((post) => post.id === postId);
-    const existingCount = targetPost?.media?.length ?? 0;
-    const remaining = Math.max(0, 4 - existingCount);
+    const editor = editorRefs.current[postId];
+    const existingInline = editor ? editor.querySelectorAll("img.tf-inline-img").length : 0;
+    const existingMedia = targetPost?.media?.length ?? 0;
+    const totalExisting = existingInline + existingMedia;
+    const remaining = Math.max(0, 4 - totalExisting);
     if (remaining === 0) {
       event.target.value = "";
       setNotice(t("Max 4 media per tweet.", "每条推文最多 4 个媒体文件。"));
       return;
     }
     const accepted = files.slice(0, remaining);
-    const mediaItems = accepted.map((file) => ({
-      id: createId(),
-      type: file.type.startsWith("video/")
-        ? ("video" as const)
-        : file.type === "image/gif"
-          ? ("gif" as const)
-          : ("image" as const),
-      name: file.name,
-      url: URL.createObjectURL(file)
-    }));
-    updateCurrentDraft((draft) => ({
-      ...draft,
-      posts: draft.posts.map((post) =>
-        post.id === postId
-          ? {
-              ...post,
-              media: [
-                ...(post.media ?? []),
-                ...mediaItems
-              ]
-            }
-          : post
-      )
-    }));
+
+    if (editor) {
+      let insertHtml = "";
+      for (const file of accepted) {
+        const url = URL.createObjectURL(file);
+        const id = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const type = file.type.startsWith("video/") ? "video" : file.type === "image/gif" ? "gif" : "image";
+        insertHtml += `<p>${buildInlineImgTag(url, id, file.name, type)}</p>`;
+      }
+      editor.insertAdjacentHTML("beforeend", insertHtml);
+      const postText = normalizeRichHtml(editor.innerHTML);
+      updateCurrentDraft((draft) => ({
+        ...draft,
+        posts: draft.posts.map((post) =>
+          post.id === postId ? { ...post, text: postText } : post
+        )
+      }));
+    } else {
+      const mediaItems = accepted.map((file) => ({
+        id: createId(),
+        type: file.type.startsWith("video/")
+          ? ("video" as const)
+          : file.type === "image/gif"
+            ? ("gif" as const)
+            : ("image" as const),
+        name: file.name,
+        url: URL.createObjectURL(file)
+      }));
+      updateCurrentDraft((draft) => ({
+        ...draft,
+        posts: draft.posts.map((post) =>
+          post.id === postId
+            ? { ...post, media: [...(post.media ?? []), ...mediaItems] }
+            : post
+        )
+      }));
+    }
+
     setTargetUploadPostId(null);
     setMediaMenuPostId(null);
     event.target.value = "";
