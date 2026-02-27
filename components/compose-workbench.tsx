@@ -5272,6 +5272,7 @@ function RichEditor({
   bindRef: (el: HTMLDivElement | null) => void;
 }) {
   const internalRef = useRef<HTMLDivElement | null>(null);
+  const dragImgRef = useRef<HTMLImageElement | null>(null);
   const editorAriaLabel =
     variant === "article"
       ? locale === "zh"
@@ -5312,13 +5313,52 @@ function RichEditor({
       onFocus={onFocus}
       onInput={(event) => onChange(normalizeRichHtml(event.currentTarget.innerHTML))}
       onBlur={(event) => onChange(normalizeRichHtml(event.currentTarget.innerHTML))}
+      onDragStart={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.tagName === "IMG" && target.classList.contains("tf-inline-img")) {
+          dragImgRef.current = target as HTMLImageElement;
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/x-inline-img", "1");
+        }
+      }}
       onDragOver={(event) => {
         event.preventDefault();
-        event.dataTransfer.dropEffect = event.dataTransfer.types.includes("Files") ? "copy" : "move";
+        if (event.dataTransfer.types.includes("text/x-inline-img")) {
+          event.dataTransfer.dropEffect = "move";
+        } else {
+          event.dataTransfer.dropEffect = event.dataTransfer.types.includes("Files") ? "copy" : "move";
+        }
       }}
+      onDragEnd={() => { dragImgRef.current = null; }}
       onDrop={(event) => {
         const editor = internalRef.current;
         if (!editor) return;
+
+        /* ── Internal image reorder ── */
+        if (dragImgRef.current && event.dataTransfer.types.includes("text/x-inline-img")) {
+          event.preventDefault();
+          const img = dragImgRef.current;
+          dragImgRef.current = null;
+          const imgWrapper = img.closest("p") ?? img;
+          const dropY = event.clientY;
+          let insertBefore: Node | null = null;
+          for (const child of Array.from(editor.childNodes)) {
+            const rect = (child as HTMLElement).getBoundingClientRect?.();
+            if (rect && dropY < rect.top + rect.height / 2) {
+              insertBefore = child;
+              break;
+            }
+          }
+          if (insertBefore && insertBefore !== imgWrapper && insertBefore !== imgWrapper.nextSibling) {
+            editor.insertBefore(imgWrapper, insertBefore);
+          } else if (!insertBefore && imgWrapper !== editor.lastChild) {
+            editor.appendChild(imgWrapper);
+          }
+          onChange(normalizeRichHtml(editor.innerHTML));
+          return;
+        }
+
+        /* ── External file drop ── */
         const files = Array.from(event.dataTransfer.files).filter(
           (f) => f.type.startsWith("image/") || f.type.startsWith("video/")
         );
@@ -5335,24 +5375,26 @@ function RichEditor({
             const type = file.type.startsWith("video/") ? "video" : file.type === "image/gif" ? "gif" : "image";
             insertHtml += `<p>${buildInlineImgTag(url, id, file.name, type)}</p>`;
           }
-          const sel = window.getSelection();
-          if (sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode)) {
-            const range = sel.getRangeAt(0);
-            range.deleteContents();
-            const temp = document.createElement("div");
-            temp.innerHTML = insertHtml;
-            const frag = document.createDocumentFragment();
-            while (temp.firstChild) frag.appendChild(temp.firstChild);
-            range.insertNode(frag);
+          const dropY = event.clientY;
+          let target: Node | null = null;
+          for (const child of Array.from(editor.childNodes)) {
+            const rect = (child as HTMLElement).getBoundingClientRect?.();
+            if (rect && dropY < rect.top + rect.height / 2) {
+              target = child;
+              break;
+            }
+          }
+          const temp = document.createElement("div");
+          temp.innerHTML = insertHtml;
+          const frag = document.createDocumentFragment();
+          while (temp.firstChild) frag.appendChild(temp.firstChild);
+          if (target) {
+            editor.insertBefore(frag, target);
           } else {
-            editor.insertAdjacentHTML("beforeend", insertHtml);
+            editor.appendChild(frag);
           }
           onChange(normalizeRichHtml(editor.innerHTML));
           return;
-        }
-        const imgSrc = event.dataTransfer.getData("text/plain");
-        if (imgSrc && imgSrc.startsWith("blob:")) {
-          event.preventDefault();
         }
       }}
     />
