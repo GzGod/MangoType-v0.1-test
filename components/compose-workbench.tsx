@@ -1221,25 +1221,58 @@ export function ComposeWorkbench() {
         currentDraft.kind === "article" ? toLintText(post.text) : tweetOutputByPost[post.id] ?? "";
       const text = rawText.trim() || (locale === "zh" ? "（空）" : "(Empty)");
       const base = Math.max(1, Math.floor(text.length / 18));
-      const inlineImgs = extractInlineImages(post.text).map((img) => ({
-        id: img.id || img.url,
-        type: img.type,
-        name: img.name,
-        url: img.url
-      }));
-      const existingMedia = (post.media ?? []).map((item) => ({
-        id: item.id,
-        type: item.type,
-        name: item.name,
-        url: item.url
-      }));
-      const inlineIds = new Set(inlineImgs.map((i) => i.id));
-      const media = [...inlineImgs, ...existingMedia.filter((m) => !inlineIds.has(m.id))];
+
+      // Build ordered blocks preserving inline image positions
+      type PreviewBlock =
+        | { kind: "text"; content: string }
+        | { kind: "image"; id: string; url: string; name: string; type: string };
+      const blocks: PreviewBlock[] = [];
+      if (typeof window !== "undefined") {
+        const container = window.document.createElement("div");
+        container.innerHTML = post.text;
+        let textAcc = "";
+        const flushText = () => {
+          const t = textAcc.replace(/\s+/g, " ").trim();
+          if (t) blocks.push({ kind: "text", content: t });
+          textAcc = "";
+        };
+        Array.from(container.childNodes).forEach((node) => {
+          const el = node as HTMLElement;
+          const img = el.tagName === "IMG" && el.classList.contains("tf-inline-img")
+            ? el as HTMLImageElement
+            : el.querySelector?.("img.tf-inline-img") as HTMLImageElement | null;
+          if (img) {
+            flushText();
+            blocks.push({
+              kind: "image",
+              id: img.getAttribute("data-media-id") || img.src,
+              url: img.src,
+              name: img.getAttribute("data-media-name") || "image",
+              type: img.getAttribute("data-media-type") || "image"
+            });
+          } else {
+            const nodeText = el.textContent ?? "";
+            if (nodeText.trim()) textAcc += (textAcc ? "\n" : "") + nodeText.trim();
+          }
+        });
+        flushText();
+      } else {
+        blocks.push({ kind: "text", content: text });
+      }
+      if (blocks.length === 0) blocks.push({ kind: "text", content: text });
+
+      // Also include post.media (non-inline attachments) at the end
+      const inlineIds = new Set(
+        blocks.filter((b) => b.kind === "image").map((b) => (b as { id: string }).id)
+      );
+      const extraMedia = (post.media ?? []).filter((m) => !inlineIds.has(m.id));
+
       return {
         id: post.id,
         index,
         text,
-        media,
+        blocks,
+        extraMedia,
         replies: 2 + base,
         reposts: 5 + base * 2,
         likes: 20 + base * 5,
@@ -3580,14 +3613,28 @@ export function ComposeWorkbench() {
                             <i aria-hidden>·</i>
                             <span>{t("now", "刚刚")}</span>
                           </div>
-                          <div className="tf-x-post-text">
-                            {post.text.split("\n").map((line, lineIndex) => (
-                              <p key={`${post.id}-${lineIndex}`}>{line || "\u00a0"}</p>
-                            ))}
-                          </div>
-                          {(post.media?.length ?? 0) > 0 && (
+                          {post.blocks.map((block, bi) =>
+                            block.kind === "text" ? (
+                              <div key={bi} className="tf-x-post-text">
+                                {block.content.split("\n").map((line, li) => (
+                                  <p key={li}>{line || "\u00a0"}</p>
+                                ))}
+                              </div>
+                            ) : (
+                              <div key={bi} className="tf-x-post-media">
+                                <div className="tf-x-media-item">
+                                  {block.type === "video" ? (
+                                    <video src={block.url} controls preload="metadata" />
+                                  ) : (
+                                    <img src={block.url} alt={block.name} loading="lazy" />
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          )}
+                          {post.extraMedia.length > 0 && (
                             <div className="tf-x-post-media">
-                              {(post.media ?? []).map((media) => (
+                              {post.extraMedia.map((media) => (
                                 <div key={media.id} className="tf-x-media-item">
                                   {media.url && (media.type === "image" || media.type === "gif") ? (
                                     <img src={media.url} alt={media.name} loading="lazy" />
