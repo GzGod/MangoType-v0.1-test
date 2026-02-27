@@ -1221,16 +1221,25 @@ export function ComposeWorkbench() {
         currentDraft.kind === "article" ? toLintText(post.text) : tweetOutputByPost[post.id] ?? "";
       const text = rawText.trim() || (locale === "zh" ? "（空）" : "(Empty)");
       const base = Math.max(1, Math.floor(text.length / 18));
+      const inlineImgs = extractInlineImages(post.text).map((img) => ({
+        id: img.id || img.url,
+        type: img.type,
+        name: img.name,
+        url: img.url
+      }));
+      const existingMedia = (post.media ?? []).map((item) => ({
+        id: item.id,
+        type: item.type,
+        name: item.name,
+        url: item.url
+      }));
+      const inlineIds = new Set(inlineImgs.map((i) => i.id));
+      const media = [...inlineImgs, ...existingMedia.filter((m) => !inlineIds.has(m.id))];
       return {
         id: post.id,
         index,
         text,
-        media: (post.media ?? []).map((item) => ({
-          id: item.id,
-          type: item.type,
-          name: item.name,
-          url: item.url
-        })),
+        media,
         replies: 2 + base,
         reposts: 5 + base * 2,
         likes: 20 + base * 5,
@@ -4526,7 +4535,15 @@ export function ComposeWorkbench() {
                       {selectedPublished.posts.map((post, index) => {
                         const isThread = selectedPublished.posts.length > 1;
                         const showThreadLine = isThread && index < selectedPublished.posts.length - 1;
-                        const postText = toLintText(post.text).trim();
+                        const postText = toLintText(stripInlineImages(post.text)).trim();
+                        const inlineImgs = extractInlineImages(post.text).map((img) => ({
+                          id: img.id || img.url,
+                          type: img.type,
+                          name: img.name,
+                          url: img.url
+                        }));
+                        const inlineIds = new Set(inlineImgs.map((i) => i.id));
+                        const allMedia = [...inlineImgs, ...(post.media ?? []).filter((m) => !inlineIds.has(m.id))];
                         return (
                           <article key={post.id} className="tf-x-post-card">
                             <div className="tf-x-avatar-wrap">
@@ -4551,9 +4568,9 @@ export function ComposeWorkbench() {
                                   <p key={`${post.id}-${lineIndex}`}>{line || "\u00a0"}</p>
                                 ))}
                               </div>
-                              {(post.media?.length ?? 0) > 0 && (
+                              {allMedia.length > 0 && (
                                 <div className="tf-x-post-media">
-                                  {(post.media ?? []).map((media) => (
+                                  {allMedia.map((media) => (
                                     <div key={media.id} className="tf-x-media-item">
                                       {media.url && (media.type === "image" || media.type === "gif") ? (
                                         <img src={media.url} alt={media.name} loading="lazy" />
