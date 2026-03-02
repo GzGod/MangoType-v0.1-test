@@ -136,6 +136,44 @@ type XMediaUploadResponse = {
   error?: string;
   message?: string;
 };
+type XTweetDetail = {
+  id: string;
+  text: string;
+  createdAt: string;
+  metrics: {
+    likes: number;
+    reposts: number;
+    replies: number;
+    quotes: number;
+    bookmarks: number;
+    impressions: number;
+    profileClicks: number;
+    engagementRate: number;
+  };
+  media: Array<{
+    id: string;
+    type: "image" | "video" | "gif";
+    name: string;
+    url?: string;
+  }>;
+};
+type XTweetDetailsResponse = {
+  tweets?: XTweetDetail[];
+  errors?: Array<{
+    message?: string;
+    detail?: string;
+  }>;
+  error?: string;
+  message?: string;
+  status?: number;
+  details?: {
+    detail?: string;
+    title?: string;
+    errors?: Array<{
+      message?: string;
+    }>;
+  };
+};
 type DraftPostMedia = NonNullable<WorkspaceState["drafts"][number]["posts"][number]["media"]>[number];
 
 const ONBOARDING_SEEN_KEY = "hanfully_v2_onboarding_seen";
@@ -430,6 +468,31 @@ function resolveXMediaUploadErrorMessage(
     : `Media upload failed (HTTP ${fallbackStatus}).`;
 }
 
+function resolveXTweetDetailsErrorMessage(
+  payload: XTweetDetailsResponse | null,
+  fallbackStatus: number,
+  locale: UiLocale
+): string {
+  const detail = payload?.details;
+  const firstDetailError = detail?.errors?.find((item) => typeof item.message === "string")?.message;
+  const bestMessage =
+    payload?.message ??
+    detail?.detail ??
+    firstDetailError ??
+    detail?.title ??
+    payload?.error ??
+    payload?.errors?.find((item) => item.detail || item.message)?.detail ??
+    payload?.errors?.find((item) => item.detail || item.message)?.message;
+
+  if (bestMessage && bestMessage.trim().length > 0) {
+    return bestMessage;
+  }
+
+  return locale === "zh"
+    ? `读取推文详情失败（HTTP ${fallbackStatus}）。`
+    : `Failed to load tweet details (HTTP ${fallbackStatus}).`;
+}
+
 function inferMediaMimeType(media: DraftPostMedia): string {
   if (media.type === "gif") {
     return "image/gif";
@@ -475,6 +538,11 @@ export function ComposeWorkbench() {
   const [previewMobile, setPreviewMobile] = useState(false);
   const [dragMedia, setDragMedia] = useState<{ postId: string; mediaId: string } | null>(null);
   const [draftHistory, setDraftHistory] = useState<Record<string, DraftSnapshot[]>>({});
+  const [publishedDetailsByItemId, setPublishedDetailsByItemId] = useState<
+    Record<string, XTweetDetail[]>
+  >({});
+  const [publishedDetailsLoadingId, setPublishedDetailsLoadingId] = useState<string | null>(null);
+  const [publishedDetailsError, setPublishedDetailsError] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [authConfig, setAuthConfig] = useState({
     ready: true,
@@ -516,6 +584,29 @@ export function ComposeWorkbench() {
   const authorIdentity = useMemo(() => resolveAuthorIdentity(session), [session]);
   const profileSubtitle = authorIdentity.signedIn ? authorIdentity.handle : t("Workspace", "工作区");
   const selectedPublished = workspace.published.find((item) => item.id === selectedPublishedId) ?? workspace.published[0] ?? null;
+  const selectedPublishedTweetIds = useMemo(() => {
+    if (!selectedPublished) {
+      return [];
+    }
+    return (
+      selectedPublished.xTweetIds
+        ?.map((tweetId) => tweetId.trim())
+        .filter((tweetId) => tweetId.length > 0) ?? []
+    );
+  }, [selectedPublished]);
+  const selectedPublishedDetails = useMemo(() => {
+    if (!selectedPublished) {
+      return [];
+    }
+    return publishedDetailsByItemId[selectedPublished.id] ?? [];
+  }, [publishedDetailsByItemId, selectedPublished]);
+  const selectedPublishedDetailById = useMemo(() => {
+    const map = new Map<string, XTweetDetail>();
+    selectedPublishedDetails.forEach((detail) => {
+      map.set(detail.id, detail);
+    });
+    return map;
+  }, [selectedPublishedDetails]);
   const tenorApiKey = (process.env.NEXT_PUBLIC_TENOR_API_KEY ?? TENOR_DEFAULT_KEY).trim() || TENOR_DEFAULT_KEY;
 
   useEffect(() => {
@@ -687,6 +778,68 @@ export function ComposeWorkbench() {
     window.addEventListener("mousedown", onClick);
     return () => window.removeEventListener("mousedown", onClick);
   }, [draftPickerOpen]);
+
+  useEffect(() => {
+    if (paneTab !== "posted" || !selectedPublished) {
+      return;
+    }
+    if (authStatus !== "authenticated") {
+      return;
+    }
+    if (selectedPublishedTweetIds.length === 0) {
+      setPublishedDetailsError("");
+      return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(publishedDetailsByItemId, selectedPublished.id)) {
+      setPublishedDetailsError("");
+      return;
+    }
+
+    let cancelled = false;
+    setPublishedDetailsLoadingId(selectedPublished.id);
+    setPublishedDetailsError("");
+
+    void fetchPublishedTweetDetails(selectedPublishedTweetIds)
+      .then((details) => {
+        if (cancelled) {
+          return;
+        }
+        setPublishedDetailsByItemId((prev) => ({
+          ...prev,
+          [selectedPublished.id]: details
+        }));
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        const message =
+          error instanceof Error
+            ? error.message
+            : t("Failed to load tweet details.", "加载推文详情失败。");
+        setPublishedDetailsError(message);
+      })
+      .finally(() => {
+        if (cancelled) {
+          return;
+        }
+        setPublishedDetailsLoadingId((prev) =>
+          prev === selectedPublished.id ? null : prev
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authStatus,
+    paneTab,
+    publishedDetailsByItemId,
+    selectedPublished,
+    selectedPublishedTweetIds,
+    locale
+  ]);
 
   useEffect(() => {
     if (!commandOpen) {
@@ -2342,6 +2495,44 @@ export function ComposeWorkbench() {
     return tweetIds;
   }
 
+  async function fetchPublishedTweetDetails(tweetIds: string[]): Promise<XTweetDetail[]> {
+    const normalizedIds = tweetIds
+      .map((tweetId) => tweetId.trim())
+      .filter((tweetId) => tweetId.length > 0)
+      .slice(0, 25);
+
+    if (normalizedIds.length === 0) {
+      return [];
+    }
+
+    const response = await fetch(`/api/x/tweets/details?ids=${encodeURIComponent(normalizedIds.join(","))}`, {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store"
+    });
+
+    let payload: XTweetDetailsResponse | null = null;
+    try {
+      payload = (await response.json()) as XTweetDetailsResponse;
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error(
+          t(
+            "X session expired. Please sign in again, then retry.",
+            "X 登录态已失效，请重新登录后重试。"
+          )
+        );
+      }
+      throw new Error(resolveXTweetDetailsErrorMessage(payload, response.status, locale));
+    }
+
+    return Array.isArray(payload?.tweets) ? payload.tweets : [];
+  }
+
   function queueCurrentDraft() {
     if (!currentDraft) {
       return;
@@ -2399,8 +2590,9 @@ export function ComposeWorkbench() {
     const prepared = prepareCurrentDraftForPublish();
     const draftId = currentDraft.id;
     const draftKind = currentDraft.kind;
+    let tweetIds: string[] = [];
     try {
-      await publishPostsToX(prepared);
+      tweetIds = await publishPostsToX(prepared);
     } catch (error) {
       const message =
         error instanceof Error
@@ -2427,7 +2619,10 @@ export function ComposeWorkbench() {
       draftKind
     });
     const persistedPosts = await persistMediaUrls(queueItem.posts);
-    const published = publishQueueItem({ ...queueItem, posts: persistedPosts });
+    const published = publishQueueItem(
+      { ...queueItem, posts: persistedPosts },
+      { xTweetIds: tweetIds }
+    );
     updateWorkspace((prev) => {
       const nextDrafts = prev.drafts.length > 1
         ? prev.drafts.filter((draft) => draft.id !== draftId)
@@ -2513,11 +2708,15 @@ export function ComposeWorkbench() {
       };
 
       try {
-        await publishPostsToX(item.posts);
+        const tweetIds = await publishPostsToX(item.posts);
         succeeded += 1;
         succeededIds.add(item.id);
         const persistedItem = { ...attemptedItem, posts: await persistMediaUrls(attemptedItem.posts) };
-        publishedItems.push(publishQueueItem(persistedItem));
+        publishedItems.push(
+          publishQueueItem(persistedItem, {
+            xTweetIds: tweetIds
+          })
+        );
         activityLogs.push(
           createActivityLog({
             level: "info",
@@ -2609,8 +2808,9 @@ export function ComposeWorkbench() {
       updatedAt: nowIso
     };
 
+    let tweetIds: string[] = [];
     try {
-      await publishPostsToX(target.posts);
+      tweetIds = await publishPostsToX(target.posts);
     } catch (error) {
       const errorMessage =
         error instanceof Error
@@ -2658,7 +2858,12 @@ export function ComposeWorkbench() {
     updateWorkspace((prev) => ({
       ...prev,
       queue: prev.queue.filter((item) => item.id !== id),
-      published: [publishQueueItem(persistedScheduled), ...prev.published].sort(sortPublishedDesc),
+      published: [
+        publishQueueItem(persistedScheduled, {
+          xTweetIds: tweetIds
+        }),
+        ...prev.published
+      ].sort(sortPublishedDesc),
       activity: appendActivityLogs(prev.activity, [
         createActivityLog({
           level: "info",
@@ -4591,10 +4796,25 @@ export function ComposeWorkbench() {
                     </div>
 
                     <div className="tf-posted-tweet-list">
+                      {publishedDetailsLoadingId === selectedPublished.id && (
+                        <p className="tf-muted-light">
+                          {t("Loading real tweet data...", "正在加载真实推文数据...")}
+                        </p>
+                      )}
+                      {publishedDetailsError && (
+                        <p className="tf-muted-light warn">{publishedDetailsError}</p>
+                      )}
                       {selectedPublished.posts.map((post, index) => {
                         const isThread = selectedPublished.posts.length > 1;
                         const showThreadLine = isThread && index < selectedPublished.posts.length - 1;
-                        const postText = toLintText(stripInlineImages(post.text)).trim();
+                        const tweetId = selectedPublished.xTweetIds?.[index];
+                        const detail =
+                          (tweetId ? selectedPublishedDetailById.get(tweetId) : undefined) ??
+                          selectedPublishedDetails[index];
+                        const postText = (
+                          detail?.text ??
+                          toLintText(stripInlineImages(post.text))
+                        ).trim();
                         const inlineImgs = extractInlineImages(post.text).map((img) => ({
                           id: img.id || img.url,
                           type: img.type,
@@ -4602,7 +4822,12 @@ export function ComposeWorkbench() {
                           url: img.url
                         }));
                         const inlineIds = new Set(inlineImgs.map((i) => i.id));
-                        const allMedia = [...inlineImgs, ...(post.media ?? []).filter((m) => !inlineIds.has(m.id))];
+                        const fallbackMedia = [
+                          ...inlineImgs,
+                          ...(post.media ?? []).filter((m) => !inlineIds.has(m.id))
+                        ];
+                        const allMedia = detail?.media?.length ? detail.media : fallbackMedia;
+                        const createdAt = detail?.createdAt || selectedPublished.publishedAt;
                         return (
                           <article key={post.id} className="tf-x-post-card">
                             <div className="tf-x-avatar-wrap">
@@ -4620,7 +4845,7 @@ export function ComposeWorkbench() {
                                 <strong>{authorIdentity.name}</strong>
                                 <span>{authorIdentity.handle}</span>
                                 <i aria-hidden>&middot;</i>
-                                <span>{formatDateTime(selectedPublished.publishedAt)}</span>
+                                <span>{formatDateTime(createdAt)}</span>
                               </div>
                               <div className="tf-x-post-text">
                                 {postText.split("\n").map((line, lineIndex) => (
@@ -4638,6 +4863,37 @@ export function ComposeWorkbench() {
                                       ) : null}
                                     </div>
                                   ))}
+                                </div>
+                              )}
+                              {detail?.metrics && (
+                                <div className="tf-x-post-stats">
+                                  <button type="button" tabIndex={-1}>
+                                    <svg viewBox="0 0 24 24" aria-hidden>
+                                      <path d="M4 5h16v10H8l-4 4V5z" />
+                                    </svg>
+                                    <span>{formatCompactPreviewNumber(detail.metrics.replies)}</span>
+                                  </button>
+                                  <button type="button" tabIndex={-1}>
+                                    <svg viewBox="0 0 24 24" aria-hidden>
+                                      <path d="m4 7 4 4-4 4" />
+                                      <path d="M8 11h9a3 3 0 0 1 0 6h-2" />
+                                      <path d="m20 17-4-4 4-4" />
+                                      <path d="M16 13H7a3 3 0 0 1 0-6h2" />
+                                    </svg>
+                                    <span>{formatCompactPreviewNumber(detail.metrics.reposts)}</span>
+                                  </button>
+                                  <button type="button" tabIndex={-1}>
+                                    <svg viewBox="0 0 24 24" aria-hidden>
+                                      <path d="M12 20s-7-4.7-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.3-7 10-7 10Z" />
+                                    </svg>
+                                    <span>{formatCompactPreviewNumber(detail.metrics.likes)}</span>
+                                  </button>
+                                  <button type="button" tabIndex={-1}>
+                                    <svg viewBox="0 0 24 24" aria-hidden>
+                                      <path d="M4 18h3V9H4zm6 0h3V5h-3zm6 0h3v-7h-3z" />
+                                    </svg>
+                                    <span>{formatCompactPreviewNumber(detail.metrics.impressions)}</span>
+                                  </button>
                                 </div>
                               )}
                             </div>
@@ -5509,4 +5765,3 @@ function RichEditor({
     />
   );
 }
-

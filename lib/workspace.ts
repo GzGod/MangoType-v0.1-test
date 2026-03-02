@@ -75,6 +75,7 @@ export interface PublishedItem {
   posts: ThreadPost[];
   sourceDraftId?: string;
   draftKind?: DraftKind;
+  xTweetIds?: string[];
   metrics: PostMetrics;
 }
 
@@ -223,7 +224,7 @@ export function normalizeWorkspaceState(
     drafts: normalizedDrafts,
     selectedDraftId,
     queue: (payload.queue ?? []).map(normalizeQueueItem).sort(sortQueueAsc),
-    published: (payload.published ?? []).slice().sort(sortPublishedDesc),
+    published: (payload.published ?? []).map(normalizePublishedItem).sort(sortPublishedDesc),
     activity: normalizeActivityLogs(payload.activity),
     ruleState: { ...defaults.ruleState, ...(payload.ruleState ?? {}) }
   };
@@ -300,8 +301,18 @@ export function buildQueueItem(
   };
 }
 
-export function publishQueueItem(item: QueueItem): PublishedItem {
+export function publishQueueItem(
+  item: QueueItem,
+  options?: {
+    xTweetIds?: string[];
+  }
+): PublishedItem {
   const metrics = generateMockMetrics(item);
+  const normalizedTweetIds =
+    options?.xTweetIds
+      ?.map((tweetId) => tweetId.trim())
+      .filter((tweetId) => tweetId.length > 0)
+      .slice(0, item.postCount) ?? [];
   return {
     id: createId(),
     sourceQueueId: item.id,
@@ -311,6 +322,7 @@ export function publishQueueItem(item: QueueItem): PublishedItem {
     posts: item.posts.map((post) => ({ ...post })),
     sourceDraftId: item.sourceDraftId,
     draftKind: item.draftKind,
+    xTweetIds: normalizedTweetIds.length > 0 ? normalizedTweetIds : undefined,
     metrics
   };
 }
@@ -543,6 +555,35 @@ function normalizeActivityLogs(items: ActivityLog[] | undefined): ActivityLog[] 
     }))
     .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
     .slice(0, MAX_ACTIVITY_LOGS);
+}
+
+function normalizePublishedItem(item: PublishedItem): PublishedItem {
+  const likes = Number(item.metrics?.likes);
+  const reposts = Number(item.metrics?.reposts);
+  const replies = Number(item.metrics?.replies);
+  const bookmarks = Number(item.metrics?.bookmarks);
+  const impressions = Number(item.metrics?.impressions);
+  const profileClicks = Number(item.metrics?.profileClicks);
+  const engagementRate = Number(item.metrics?.engagementRate);
+
+  return {
+    ...item,
+    posts: normalizePosts(item.posts ?? []),
+    xTweetIds:
+      item.xTweetIds
+        ?.map((tweetId) => tweetId.trim())
+        .filter((tweetId) => tweetId.length > 0)
+        .slice(0, Math.max(1, item.postCount ?? 1)) ?? undefined,
+    metrics: {
+      impressions: Number.isFinite(impressions) ? Math.max(0, Math.floor(impressions)) : 0,
+      likes: Number.isFinite(likes) ? Math.max(0, Math.floor(likes)) : 0,
+      reposts: Number.isFinite(reposts) ? Math.max(0, Math.floor(reposts)) : 0,
+      replies: Number.isFinite(replies) ? Math.max(0, Math.floor(replies)) : 0,
+      bookmarks: Number.isFinite(bookmarks) ? Math.max(0, Math.floor(bookmarks)) : 0,
+      profileClicks: Number.isFinite(profileClicks) ? Math.max(0, Math.floor(profileClicks)) : 0,
+      engagementRate: Number.isFinite(engagementRate) ? Math.max(0, engagementRate) : 0
+    }
+  };
 }
 
 function normalizeDraft(input: DraftItem): DraftItem {
