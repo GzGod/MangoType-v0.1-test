@@ -1,3 +1,5 @@
+import { fixChinesePunctuationStyle } from "@/lib/rule-fixes";
+
 export type RuleLevel = "error" | "warn";
 
 export type RuleId =
@@ -185,7 +187,7 @@ export const RULE_DEFINITIONS: RuleDefinition[] = [
     level: "warn",
     category: "suggestion",
     enabledByDefault: true,
-    autofix: false
+    autofix: true
   },
   {
     id: "R103",
@@ -451,6 +453,8 @@ export function applyRuleFix(
       return fixDash(input);
     case "R007":
       return fixFullWidthDigits(input);
+    case "R102":
+      return fixChinesePunctuationStyle(input);
     default:
       return input;
   }
