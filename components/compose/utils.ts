@@ -384,8 +384,8 @@ export function formatSavedClock(value: string, locale: UiLocale): string {
 }
 
 export function resolveAuthorIdentity(session: Session | null | undefined): AuthorIdentity {
-  const fallbackName = "xuegao";
-  const fallbackUsername = "0xuegao";
+  const fallbackName = "Guest";
+  const fallbackUsername = "guest";
   const name = cleanDisplayName(session?.user?.name) ?? fallbackName;
   const username =
     normalizeUsername(session?.user?.username) ?? normalizeUsername(name) ?? fallbackUsername;
