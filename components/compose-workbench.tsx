@@ -3,7 +3,6 @@
 import clsx from "clsx";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { signIn, signOut, useSession } from "next-auth/react";
-import type { Session } from "next-auth";
 import {
   applyAllFixes,
   applyRuleFix,
@@ -24,484 +23,74 @@ import {
   buildInlineImgTag
 } from "@/lib/formatting";
 import {
-  appendActivityLogs,
-  buildQueueItem,
-  createActivityLog,
   createDefaultWorkspaceState,
   createDraft,
   createId,
-  DRAFT_KIND_LABELS,
   formatDateTime,
-  LEGACY_STORAGE_KEY,
-  migrateLegacyState,
   normalizeWorkspaceState,
-  publishQueueItem,
-  retryQueueItem,
-  sortPublishedDesc,
-  sortQueueAsc,
-  WORKSPACE_STORAGE_KEY,
   type DraftKind,
   type ThreadPost,
   type WorkspaceState
 } from "@/lib/workspace";
 import { computeAnalytics, formatNumber } from "@/lib/dashboard";
 import { getXCount } from "@/lib/x-count";
-
-type PaneTab = "drafts" | "scheduled" | "posted";
-type PublishState =
-  | "idle"
-  | "blocked"
-  | "scheduling"
-  | "scheduled"
-  | "publishing"
-  | "published";
-type UiTheme = "signature" | "ink" | "sunset";
-type UiLocale = "en" | "zh";
-type WorkspaceSaveState = "saving" | "saved" | "failed";
-type QuickCommand = {
-  id: string;
-  label: string;
-  hint: string;
-  keywords: string;
-  run: () => void | Promise<void>;
-};
-type DraftTemplate = {
-  id: string;
-  name: string;
-  kind: DraftKind;
-  title: string;
-  description: string;
-  posts: string[];
-};
-type DraftSnapshot = {
-  id: string;
-  draftId: string;
-  createdAt: string;
-  label: string;
-  signature: string;
-  kind: DraftKind;
-  title: string;
-  topic?: string;
-  posts: WorkspaceState["drafts"][number]["posts"];
-  selectedPostId: string;
-};
-type TenorMediaVariant = {
-  url?: string;
-  preview?: string;
-  dims?: number[];
-};
-type TenorGifApiItem = {
-  id: string;
-  title?: string;
-  content_description?: string;
-  media?: Array<{
-    gif?: TenorMediaVariant;
-    tinygif?: TenorMediaVariant;
-    mediumgif?: TenorMediaVariant;
-    nanogif?: TenorMediaVariant;
-  }>;
-};
-type TenorGifApiResponse = {
-  results?: TenorGifApiItem[];
-  next?: string | number;
-};
-type TenorGifTile = {
-  id: string;
-  title: string;
-  gifUrl: string;
-  previewUrl: string;
-  width: number;
-  height: number;
-};
-type XPublishResponse = {
-  data?: {
-    id?: string;
-  };
-  error?: string;
-  message?: string;
-  status?: number;
-  details?: {
-    detail?: string;
-    title?: string;
-    errors?: Array<{
-      message?: string;
-    }>;
-  };
-};
-type XMediaUploadResponse = {
-  mediaId?: string;
-  data?: {
-    id?: string;
-  };
-  error?: string;
-  message?: string;
-};
-type XTweetDetail = {
-  id: string;
-  text: string;
-  createdAt: string;
-  metrics: {
-    likes: number;
-    reposts: number;
-    replies: number;
-    quotes: number;
-    bookmarks: number;
-    impressions: number;
-    profileClicks: number;
-    engagementRate: number;
-  };
-  media: Array<{
-    id: string;
-    type: "image" | "video" | "gif";
-    name: string;
-    url?: string;
-  }>;
-};
-type XTweetDetailsResponse = {
-  tweets?: XTweetDetail[];
-  errors?: Array<{
-    message?: string;
-    detail?: string;
-  }>;
-  error?: string;
-  message?: string;
-  status?: number;
-  details?: {
-    detail?: string;
-    title?: string;
-    errors?: Array<{
-      message?: string;
-    }>;
-  };
-};
-type DraftPostMedia = NonNullable<WorkspaceState["drafts"][number]["posts"][number]["media"]>[number];
-
-const ONBOARDING_SEEN_KEY = "hanfully_v2_onboarding_seen";
-const THEME_STORAGE_KEY = "hanfully_v2_theme";
-const DRAFT_HISTORY_STORAGE_KEY = "hanfully_v2_draft_history";
-const LOCALE_STORAGE_KEY = "hanfully_v2_locale";
-const TENOR_DEFAULT_KEY = "LIVDSRZULELA";
-const TENOR_PAGE_SIZE = 24;
-const TOPIC_FILTER_ALL = "__all_topics__";
-const TOPIC_FILTER_UNTAGGED = "__untagged__";
-const THEME_OPTIONS: Array<{ id: UiTheme; label: string }> = [
-  { id: "signature", label: "Signature" },
-  { id: "ink", label: "Ink" },
-  { id: "sunset", label: "Sunset" }
-];
-
-const DRAFT_OPTIONS: Array<{
-  kind: DraftKind;
-  title: string;
-  description: string;
-}> = [
-  {
-    kind: "tweet",
-    title: "Tweet",
-    description: "Single post."
-  },
-  {
-    kind: "thread",
-    title: "Thread",
-    description: "Multi-post flow, same as current layout."
-  },
-  {
-    kind: "article",
-    title: "Article",
-    description: "Long-form editor with title and subtitle styles."
-  }
-];
-
-const TEMPLATE_LIBRARY: DraftTemplate[] = [
-  {
-    id: "tweet-product-launch",
-    name: "Product Launch Tweet",
-    kind: "tweet",
-    title: "Launch Tweet",
-    description: "Clear product launch post with CTA.",
-    posts: [
-      "<p>We shipped a new feature to help creators plan one week of content in one session.</p><p>Built for solo founders and brand teams.</p><p>Reply if you want the workflow template.</p>"
-    ]
-  },
-  {
-    id: "tweet-hot-take",
-    name: "Hot Take Tweet",
-    kind: "tweet",
-    title: "Hot Take Tweet",
-    description: "One opinion + one reason + one question.",
-    posts: [
-      "<p>Most content growth problems are clarity problems, not distribution problems.</p><p>Structure first, channels second.</p><p>Do you agree?</p>"
-    ]
-  },
-  {
-    id: "thread-playbook",
-    name: "Playbook Thread",
-    kind: "thread",
-    title: "Playbook Thread",
-    description: "Hook + framework + CTA thread.",
-    posts: [
-      "If you build content for growth, this 3-step workflow is enough.\n\nInput -> Shape -> Distribute.",
-      "Input: collect 3 real audience questions every day.\n\nDo not start from opinions, start from questions.",
-      "Shape: keep one post focused on one idea.\n\nUse structure: claim -> reason -> example.",
-      "Distribute: repurpose one idea into Tweet, Thread, and Article.\n\nConsistency compounds.",
-      "If helpful, I can share a copy-paste SOP next."
-    ]
-  },
-  {
-    id: "thread-story",
-    name: "Story Thread",
-    kind: "thread",
-    title: "Story Thread",
-    description: "Narrative flow for personal story.",
-    posts: [
-      "It took me 6 months to realize low output was not a motivation problem.",
-      "I used to force myself to write everything in one sitting. It always got stuck.",
-      "Then I switched to a 3-step loop: write the point, add proof, add examples.",
-      "That cut my writing time from 2 hours to about 35 minutes.",
-      "If you feel blocked, try this for one week."
-    ]
-  },
-  {
-    id: "article-framework",
-    name: "Framework Article",
-    kind: "article",
-    title: "Framework Article",
-    description: "Structured article with title/subtitle/body.",
-    posts: [
-      "<h1>A Minimal Content System</h1><h2>From random output to repeatable quality</h2><p>Most creators rely on inspiration, so quality and cadence are unstable.</p><p>A better path is process: topic, structure, expression, distribution.</p><h3>1. Topic</h3><p>Capture audience questions weekly and prioritize by frequency.</p><h3>2. Structure</h3><p>Lead with the point, then add proof, then suggest action.</p><h3>3. Distribution</h3><p>Repurpose one core idea into Tweet, Thread, and Article.</p>"
-    ]
-  },
-  {
-    id: "article-case-study",
-    name: "Case Study Article",
-    kind: "article",
-    title: "Case Study Article",
-    description: "Case-study article skeleton.",
-    posts: [
-      "<h1>How We Built a 30-Day Content Cadence</h1><h2>What changed in strategy and execution</h2><p>This case study covers how a new account moved from random posting to a stable weekly pipeline.</p><h3>Background</h3><p>Topics were scattered and tone shifted post to post.</p><h3>Approach</h3><p>We standardized topic framing, writing structure, and daily review metrics.</p><h3>Result</h3><p>Output became consistent and engagement improved week over week.</p><blockquote>Reliable systems beat occasional viral hits.</blockquote>"
-    ]
-  }
-];
-
-type AiRewritePreset =
-  | "fix_grammar"
-  | "improve_writing"
-  | "punchier"
-  | "condense"
-  | "rephrase"
-  | "expand"
-  | "structure"
-  | "positive"
-  | "thread_start"
-  | "emoji"
-  | "announcement";
-
-const AI_PRESETS: Array<{ id: AiRewritePreset; label: string }> = [
-  { id: "fix_grammar", label: "Fix grammar" },
-  { id: "improve_writing", label: "Improve writing" },
-  { id: "punchier", label: "Make it punchier" },
-  { id: "condense", label: "Condense" },
-  { id: "rephrase", label: "Rephrase / Mix it up" },
-  { id: "expand", label: "Expand & Elaborate" },
-  { id: "structure", label: "Improve structure & spacing" },
-  { id: "positive", label: "Rewrite in a positive tone" },
-  { id: "thread_start", label: "Rewrite as thread start" },
-  { id: "emoji", label: "Add emoji" },
-  { id: "announcement", label: "Rewrite as announcement" }
-];
-
-const X_WHO_TO_FOLLOW = [
-  { name: "MangoType", handle: "@mangotype", initials: "M", avatarBg: "#FFE8BF", avatarFg: "#C26D00" },
-  { name: "Fabrizio Rinaldi", handle: "@linuz90", initials: "F", avatarBg: "#EDE9FF", avatarFg: "#6D28D9" },
-  { name: "Francesco Di Lorenzo", handle: "@frankdilo", initials: "F", avatarBg: "#D1FAE5", avatarFg: "#047857" },
-  { name: "Rajat Kapoor", handle: "@rajatkapoor", initials: "R", avatarBg: "#FEE2E2", avatarFg: "#B91C1C" },
-  { name: "Thomas Chris", handle: "@tomchris", initials: "T", avatarBg: "#E0F2FE", avatarFg: "#0369A1" },
-  { name: "Gaile", handle: "@gailemango", initials: "G", avatarBg: "#FCE7F3", avatarFg: "#BE185D" }
-];
-
-function draftKindLabel(kind: DraftKind, locale: UiLocale): string {
-  if (locale === "zh") {
-    if (kind === "tweet") {
-      return "推文";
-    }
-    if (kind === "thread") {
-      return "线程";
-    }
-    return "文章";
-  }
-  return DRAFT_KIND_LABELS[kind];
-}
-
-function draftOptionCopy(kind: DraftKind, locale: UiLocale): { title: string; description: string } {
-  if (locale === "zh") {
-    if (kind === "tweet") {
-      return { title: "推文", description: "单条发布。" };
-    }
-    if (kind === "thread") {
-      return { title: "线程", description: "多条连续发布，适合展开表达。" };
-    }
-    return { title: "文章", description: "长文编辑，支持主标题和副标题。" };
-  }
-  if (kind === "tweet") {
-    return { title: "Tweet", description: "Single post, 280-char focused." };
-  }
-  if (kind === "thread") {
-    return { title: "Thread", description: "Multi-post flow, same as current layout." };
-  }
-  return { title: "Article", description: "Long-form editor with title and subtitle styles." };
-}
-
-function themeLabel(theme: UiTheme, locale: UiLocale): string {
-  if (locale === "zh") {
-    if (theme === "signature") {
-      return "经典";
-    }
-    if (theme === "ink") {
-      return "墨色";
-    }
-    return "日落";
-  }
-  if (theme === "signature") {
-    return "Signature";
-  }
-  if (theme === "ink") {
-    return "Ink";
-  }
-  return "Sunset";
-}
-
-function normalizeTenorDims(value?: number[]): [number, number] | null {
-  if (!value || value.length < 2) {
-    return null;
-  }
-  const width = Number(value[0]);
-  const height = Number(value[1]);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return null;
-  }
-  return [width, height];
-}
-
-function mapTenorResults(items: TenorGifApiItem[]): TenorGifTile[] {
-  return items
-    .map((item) => {
-      const media = item.media?.[0];
-      const animated = media?.gif ?? media?.tinygif ?? media?.mediumgif ?? media?.nanogif;
-      if (!animated?.url) {
-        return null;
-      }
-      const previewUrl = media?.tinygif?.url ?? animated.preview ?? animated.url;
-      const dims = normalizeTenorDims(animated.dims) ?? normalizeTenorDims(media?.tinygif?.dims) ?? [320, 320];
-      return {
-        id: item.id,
-        title: (item.title || item.content_description || "Tenor GIF").trim(),
-        gifUrl: animated.url,
-        previewUrl,
-        width: dims[0],
-        height: dims[1]
-      };
-    })
-    .filter((item): item is TenorGifTile => item !== null);
-}
-
-function mergeTenorResults(prev: TenorGifTile[], next: TenorGifTile[]): TenorGifTile[] {
-  const seen = new Set(prev.map((item) => item.id));
-  const merged = [...prev];
-  next.forEach((item) => {
-    if (seen.has(item.id)) {
-      return;
-    }
-    seen.add(item.id);
-    merged.push(item);
-  });
-  return merged;
-}
-
-function normalizeTopicLabel(value: string | undefined): string {
-  if (!value) {
-    return "";
-  }
-  return value.replace(/\s+/g, " ").trim().slice(0, 28);
-}
-
-function computeRetryTimeIso(fromIso: string, attempt: number): string {
-  const retryMinutes = [2, 10, 30];
-  const index = Math.max(0, Math.min(retryMinutes.length - 1, attempt - 1));
-  const next = new Date(new Date(fromIso).getTime() + retryMinutes[index] * 60 * 1000);
-  return next.toISOString();
-}
-
-function resolveXPublishErrorMessage(
-  payload: XPublishResponse | null,
-  fallbackStatus: number,
-  locale: UiLocale
-): string {
-  const detail = payload?.details;
-  const firstDetailError = detail?.errors?.find((item) => typeof item.message === "string")?.message;
-  const bestMessage =
-    payload?.message ??
-    detail?.detail ??
-    firstDetailError ??
-    detail?.title ??
-    payload?.error;
-
-  if (bestMessage && bestMessage.trim().length > 0) {
-    return bestMessage;
-  }
-
-  return locale === "zh"
-    ? `发布失败（HTTP ${fallbackStatus}）。`
-    : `Publishing failed (HTTP ${fallbackStatus}).`;
-}
-
-function resolveXMediaUploadErrorMessage(
-  payload: XMediaUploadResponse | null,
-  fallbackStatus: number,
-  locale: UiLocale
-): string {
-  const bestMessage = payload?.message ?? payload?.error;
-  if (bestMessage && bestMessage.trim().length > 0) {
-    return bestMessage;
-  }
-  return locale === "zh"
-    ? `媒体上传失败（HTTP ${fallbackStatus}）。`
-    : `Media upload failed (HTTP ${fallbackStatus}).`;
-}
-
-function resolveXTweetDetailsErrorMessage(
-  payload: XTweetDetailsResponse | null,
-  fallbackStatus: number,
-  locale: UiLocale
-): string {
-  const detail = payload?.details;
-  const firstDetailError = detail?.errors?.find((item) => typeof item.message === "string")?.message;
-  const bestMessage =
-    payload?.message ??
-    detail?.detail ??
-    firstDetailError ??
-    detail?.title ??
-    payload?.error ??
-    payload?.errors?.find((item) => item.detail || item.message)?.detail ??
-    payload?.errors?.find((item) => item.detail || item.message)?.message;
-
-  if (bestMessage && bestMessage.trim().length > 0) {
-    return bestMessage;
-  }
-
-  return locale === "zh"
-    ? `读取推文详情失败（HTTP ${fallbackStatus}）。`
-    : `Failed to load tweet details (HTTP ${fallbackStatus}).`;
-}
-
-function inferMediaMimeType(media: DraftPostMedia): string {
-  if (media.type === "gif") {
-    return "image/gif";
-  }
-  if (media.type === "video") {
-    return "video/mp4";
-  }
-  return "image/png";
-}
+import {
+  AI_PRESETS,
+  DRAFT_OPTIONS,
+  ONBOARDING_SEEN_KEY,
+  TEMPLATE_LIBRARY,
+  TENOR_DEFAULT_KEY,
+  THEME_OPTIONS,
+  TOPIC_FILTER_ALL,
+  TOPIC_FILTER_UNTAGGED,
+  X_WHO_TO_FOLLOW
+} from "@/components/compose/constants";
+import { RichEditor } from "@/components/compose/rich-editor";
+import { useAuthConfig } from "@/components/compose/use-auth-config";
+import { useCommandPalette } from "@/components/compose/use-command-palette";
+import { useGlobalShortcuts } from "@/components/compose/use-global-shortcuts";
+import { useQueueRunner } from "@/components/compose/use-queue-runner";
+import { useTenorPicker } from "@/components/compose/use-tenor-picker";
+import { useWorkspacePersistence } from "@/components/compose/use-workspace-persistence";
+import type {
+  AiRewritePreset,
+  DraftPostMedia,
+  DraftSnapshot,
+  DraftTemplate,
+  PaneTab,
+  QuickCommand,
+  UiLocale,
+  UiTheme,
+  WorkspaceSaveState,
+  XMediaUploadResponse,
+  XPublishResponse,
+  XTweetDetail,
+  XTweetDetailsResponse
+} from "@/components/compose/types";
+import {
+  buildArticleHtml,
+  clonePosts,
+  draftKindLabel,
+  draftOptionCopy,
+  extractArticleHeading,
+  formatCompactPreviewNumber,
+  formatRelativeTime,
+  formatSavedClock,
+  formatSnapshotTimestamp,
+  inferMediaMimeType,
+  isTimestampSnapshotLabel,
+  kindIcon,
+  nextManualSnapshotLabel,
+  normalizeTopicLabel,
+  resolveAuthorIdentity,
+  resolveXMediaUploadErrorMessage,
+  resolveXPublishErrorMessage,
+  resolveXTweetDetailsErrorMessage,
+  serializeDraftSignature,
+  splitArticleBlocks,
+  snapshotPreviewText,
+  themeLabel
+} from "@/components/compose/utils";
 
 export function ComposeWorkbench() {
   const [workspace, setWorkspace] = useState<WorkspaceState>(createDefaultWorkspaceState);
@@ -515,7 +104,6 @@ export function ComposeWorkbench() {
   const [moreMenuPostId, setMoreMenuPostId] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [targetUploadPostId, setTargetUploadPostId] = useState<string | null>(null);
-  const [publishState, setPublishState] = useState<PublishState>("idle");
   const [theme, setTheme] = useState<UiTheme>("signature");
   const [locale, setLocale] = useState<UiLocale>("en");
   const [workspaceSaveState, setWorkspaceSaveState] = useState<WorkspaceSaveState>("saved");
@@ -523,18 +111,9 @@ export function ComposeWorkbench() {
   const [topicFilter, setTopicFilter] = useState<string>(TOPIC_FILTER_ALL);
   const [newDraftTopic, setNewDraftTopic] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [commandOpen, setCommandOpen] = useState(false);
-  const [commandQuery, setCommandQuery] = useState("");
   const [templateLibraryOpen, setTemplateLibraryOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [gifPickerOpen, setGifPickerOpen] = useState(false);
-  const [gifPickerPostId, setGifPickerPostId] = useState<string | null>(null);
-  const [gifQuery, setGifQuery] = useState("");
-  const [gifResults, setGifResults] = useState<TenorGifTile[]>([]);
-  const [gifNextPos, setGifNextPos] = useState<string | null>(null);
-  const [gifLoading, setGifLoading] = useState(false);
-  const [gifError, setGifError] = useState("");
   const [previewMobile, setPreviewMobile] = useState(false);
   const [dragMedia, setDragMedia] = useState<{ postId: string; mediaId: string } | null>(null);
   const [draftHistory, setDraftHistory] = useState<Record<string, DraftSnapshot[]>>({});
@@ -544,12 +123,7 @@ export function ComposeWorkbench() {
   const [publishedDetailsLoadingId, setPublishedDetailsLoadingId] = useState<string | null>(null);
   const [publishedDetailsError, setPublishedDetailsError] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [authConfig, setAuthConfig] = useState({
-    ready: true,
-    hasAuthSecret: true,
-    hasTwitterProvider: true,
-    checked: false
-  });
+  const authConfig = useAuthConfig();
   const [selectionToolbar, setSelectionToolbar] = useState<{
     visible: boolean;
     x: number;
@@ -563,12 +137,9 @@ export function ComposeWorkbench() {
   });
   const editorRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pickerRef = useRef<HTMLDivElement | null>(null);
-  const commandRef = useRef<HTMLDivElement | null>(null);
   const templateRef = useRef<HTMLDivElement | null>(null);
   const historyRef = useRef<HTMLDivElement | null>(null);
   const shortcutRef = useRef<HTMLDivElement | null>(null);
-  const gifSearchRef = useRef<HTMLInputElement | null>(null);
-  const gifRequestRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { data: session, status: authStatus } = useSession();
   const t = (en: string, zh: string) => (locale === "zh" ? zh : en);
@@ -608,126 +179,58 @@ export function ComposeWorkbench() {
     return map;
   }, [selectedPublishedDetails]);
   const tenorApiKey = (process.env.NEXT_PUBLIC_TENOR_API_KEY ?? TENOR_DEFAULT_KEY).trim() || TENOR_DEFAULT_KEY;
+  const currentDraft =
+    workspace.drafts.find((item) => item.id === workspace.selectedDraftId) ??
+    workspace.drafts[0];
+  const currentPost = currentDraft
+    ? currentDraft.posts.find((post) => post.id === currentDraft.selectedPostId) ??
+      currentDraft.posts[0]
+    : undefined;
 
-  useEffect(() => {
-    let active = true;
-    async function loadAuthConfig() {
-      try {
-        const response = await fetch("/api/auth/config-status", {
-          method: "GET",
-          cache: "no-store"
-        });
-        if (!response.ok) {
-          throw new Error("auth-config-failed");
-        }
-        const payload = (await response.json()) as {
-          ready?: boolean;
-          hasAuthSecret?: boolean;
-          hasTwitterProvider?: boolean;
-        };
-        if (!active) {
-          return;
-        }
-        setAuthConfig({
-          ready: Boolean(payload.ready),
-          hasAuthSecret: Boolean(payload.hasAuthSecret),
-          hasTwitterProvider: Boolean(payload.hasTwitterProvider),
-          checked: true
-        });
-      } catch {
-        if (!active) {
-          return;
-        }
-        setAuthConfig((prev) => ({
-          ...prev,
-          ready: false,
-          checked: true
-        }));
-      }
-    }
-    void loadAuthConfig();
-    return () => {
-      active = false;
-    };
-  }, []);
+  useWorkspacePersistence({
+    workspace,
+    hydrated,
+    theme,
+    locale,
+    draftHistory,
+    setWorkspace,
+    setTheme,
+    setLocale,
+    setDraftHistory,
+    setShowOnboarding,
+    setHydrated,
+    setWorkspaceSaveState,
+    setWorkspaceLastSavedAt
+  });
 
-  useEffect(() => {
-    const saved = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
-    if (saved) {
-      try {
-        setWorkspace(normalizeWorkspaceState(JSON.parse(saved) as Partial<WorkspaceState>));
-      } catch {
-        window.localStorage.removeItem(WORKSPACE_STORAGE_KEY);
-      }
-    } else {
-      const legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY);
-      if (legacy) {
-        const migrated = migrateLegacyState(legacy);
-        if (migrated) {
-          setWorkspace(migrated);
-        }
-      }
-    }
-    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-    if (storedTheme === "signature" || storedTheme === "ink" || storedTheme === "sunset") {
-      setTheme(storedTheme);
-    }
-    const storedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY);
-    if (storedLocale === "zh" || storedLocale === "en") {
-      setLocale(storedLocale);
-    }
-    const storedHistory = window.localStorage.getItem(DRAFT_HISTORY_STORAGE_KEY);
-    if (storedHistory) {
-      try {
-        const parsed = JSON.parse(storedHistory) as Record<string, DraftSnapshot[]>;
-        setDraftHistory(parsed);
-      } catch {
-        window.localStorage.removeItem(DRAFT_HISTORY_STORAGE_KEY);
-      }
-    }
-    if (!window.localStorage.getItem(ONBOARDING_SEEN_KEY)) {
-      setShowOnboarding(true);
-    }
-    setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) {
-      return;
-    }
-    setWorkspaceSaveState("saving");
-    const timer = window.setTimeout(() => {
-      try {
-        window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));
-        setWorkspaceSaveState("saved");
-        setWorkspaceLastSavedAt(new Date().toISOString());
-      } catch {
-        setWorkspaceSaveState("failed");
-      }
-    }, 360);
-    return () => window.clearTimeout(timer);
-  }, [hydrated, workspace]);
-
-  useEffect(() => {
-    if (!hydrated) {
-      return;
-    }
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-  }, [hydrated, theme]);
-
-  useEffect(() => {
-    if (!hydrated) {
-      return;
-    }
-    window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
-  }, [hydrated, locale]);
-
-  useEffect(() => {
-    if (!hydrated) {
-      return;
-    }
-    window.localStorage.setItem(DRAFT_HISTORY_STORAGE_KEY, JSON.stringify(draftHistory));
-  }, [draftHistory, hydrated]);
+  const {
+    gifPickerOpen,
+    gifPickerPostId,
+    gifQuery,
+    gifResults,
+    gifNextPos,
+    gifLoading,
+    gifError,
+    gifSearchRef,
+    setGifQuery,
+    closeGifPicker,
+    openGifPicker,
+    fetchTenorGifs,
+    insertGifToPost
+  } = useTenorPicker({
+    locale,
+    tenorApiKey,
+    t,
+    currentDraft,
+    editorRefs,
+    updateCurrentDraft,
+    closePostMenus: () => {
+      setMediaMenuPostId(null);
+      setAiMenuPostId(null);
+      setMoreMenuPostId(null);
+    },
+    setNotice
+  });
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -743,25 +246,6 @@ export function ComposeWorkbench() {
     const timer = window.setTimeout(() => setNotice(""), 2200);
     return () => window.clearTimeout(timer);
   }, [notice]);
-
-  useEffect(() => {
-    if (publishState === "idle" || publishState === "scheduling" || publishState === "publishing") {
-      return;
-    }
-    const timer = window.setTimeout(() => setPublishState("idle"), 1800);
-    return () => window.clearTimeout(timer);
-  }, [publishState]);
-
-  useEffect(() => {
-    if (!hydrated) {
-      return;
-    }
-    void runDueJobs({ silent: true });
-    const timer = window.setInterval(() => {
-      void runDueJobs({ silent: true });
-    }, 25000);
-    return () => window.clearInterval(timer);
-  }, [hydrated, workspace.queue]);
 
   useEffect(() => {
     if (!draftPickerOpen) {
@@ -842,49 +326,6 @@ export function ComposeWorkbench() {
   ]);
 
   useEffect(() => {
-    if (!commandOpen) {
-      return;
-    }
-    function onClick(event: MouseEvent) {
-      if (!(event.target instanceof HTMLElement)) {
-        return;
-      }
-      if (event.target.closest("[data-command-trigger='1']")) {
-        return;
-      }
-      if (commandRef.current?.contains(event.target)) {
-        return;
-      }
-      setCommandOpen(false);
-    }
-    window.addEventListener("mousedown", onClick);
-    return () => window.removeEventListener("mousedown", onClick);
-  }, [commandOpen]);
-
-  useEffect(() => {
-    if (!gifPickerOpen) {
-      return;
-    }
-    const frame = window.requestAnimationFrame(() => {
-      gifSearchRef.current?.focus();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [gifPickerOpen]);
-
-  useEffect(() => {
-    if (!gifPickerOpen) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      void fetchTenorGifs({
-        query: gifQuery,
-        append: false
-      });
-    }, 220);
-    return () => window.clearTimeout(timer);
-  }, [gifPickerOpen, gifQuery, locale]);
-
-  useEffect(() => {
     function onGlobalClick(event: MouseEvent) {
       if (!(event.target instanceof HTMLElement)) {
         return;
@@ -898,89 +339,6 @@ export function ComposeWorkbench() {
     window.addEventListener("mousedown", onGlobalClick);
     return () => window.removeEventListener("mousedown", onGlobalClick);
   }, []);
-
-  useEffect(() => {
-    function onEscape(event: KeyboardEvent) {
-      if (event.key !== "Escape") {
-        return;
-      }
-      setMediaMenuPostId(null);
-      setAiMenuPostId(null);
-      setMoreMenuPostId(null);
-      setDraftPickerOpen(false);
-      setCommandOpen(false);
-      setCommandQuery("");
-      setTemplateLibraryOpen(false);
-      setHistoryOpen(false);
-      setShortcutsOpen(false);
-      closeGifPicker();
-      setSelectionToolbar((prev) => ({ ...prev, visible: false, postId: null }));
-    }
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
-  }, []);
-
-  useEffect(() => {
-    function onGlobalShortcuts(event: KeyboardEvent) {
-      const key = event.key.toLowerCase();
-      const withMod = event.ctrlKey || event.metaKey;
-
-      if (withMod && key === "k") {
-        event.preventDefault();
-        setCommandOpen(true);
-        return;
-      }
-      if (withMod && (key === "/" || key === "?")) {
-        event.preventDefault();
-        setSidebarCollapsed((prev) => !prev);
-        return;
-      }
-      if (withMod && event.shiftKey && key === "t") {
-        event.preventDefault();
-        setTemplateLibraryOpen(true);
-        return;
-      }
-      if (withMod && event.shiftKey && key === "h") {
-        event.preventDefault();
-        setShortcutsOpen(true);
-        return;
-      }
-      if (withMod && event.shiftKey && key === "p") {
-        event.preventDefault();
-        togglePreviewView();
-        return;
-      }
-      if (withMod && event.shiftKey && key === "v") {
-        event.preventDefault();
-        const activeDraft =
-          workspace.drafts.find((item) => item.id === workspace.selectedDraftId) ??
-          workspace.drafts[0];
-        if (!activeDraft) {
-          return;
-        }
-        addDraftSnapshot(activeDraft, "Manual", "manual");
-        setNotice(t("Version snapshot saved.", "版本快照已保存。"));
-      }
-    }
-    window.addEventListener("keydown", onGlobalShortcuts);
-    return () => window.removeEventListener("keydown", onGlobalShortcuts);
-  }, [locale, workspace.activeView, workspace.drafts, workspace.selectedDraftId]);
-
-  useEffect(() => {
-    if (sidebarCollapsed && commandOpen) {
-      setCommandOpen(false);
-      setCommandQuery("");
-    }
-  }, [sidebarCollapsed, commandOpen]);
-
-  const currentDraft =
-    workspace.drafts.find((item) => item.id === workspace.selectedDraftId) ??
-    workspace.drafts[0];
-
-  const currentPost = currentDraft
-    ? currentDraft.posts.find((post) => post.id === currentDraft.selectedPostId) ??
-      currentDraft.posts[0]
-    : undefined;
 
   const previewEnabled = !!currentDraft && currentDraft.kind !== "article";
   const threadPreview = currentDraft?.kind === "thread";
@@ -1090,47 +448,6 @@ export function ComposeWorkbench() {
     }));
     setNotice(t("Article preview is not supported yet.", "文章暂不支持预览。"));
   }, [workspace.activeView, currentDraft?.id, currentDraft?.kind]);
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (paneTab !== "drafts" || workspace.activeView !== "compose" || !currentDraft || !currentPost) {
-        return;
-      }
-
-      const key = event.key.toLowerCase();
-      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-        event.preventDefault();
-        void publishCurrentDraft();
-        return;
-      }
-      if ((event.ctrlKey || event.metaKey) && key === "s") {
-        event.preventDefault();
-        queueCurrentDraft();
-        return;
-      }
-
-      if (currentDraft.kind !== "thread") {
-        return;
-      }
-
-      if ((event.ctrlKey || event.metaKey) && key === "j") {
-        event.preventDefault();
-        insertPostBelow(currentPost.id);
-        return;
-      }
-      if (event.altKey && event.key === "ArrowDown") {
-        event.preventDefault();
-        movePostDown(currentPost.id);
-        return;
-      }
-      if (event.ctrlKey && event.shiftKey && key === "i") {
-        event.preventDefault();
-        openUploadForPost(currentPost.id);
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentDraft, currentPost, paneTab, workspace.activeView]);
 
   const whitelistTerms = useMemo(
     () => parseWhitelistInput(workspace.whitelistInput),
@@ -1831,121 +1148,6 @@ export function ComposeWorkbench() {
     fileInputRef.current?.click();
   }
 
-  function closeGifPicker() {
-    gifRequestRef.current += 1;
-    setGifPickerOpen(false);
-    setGifPickerPostId(null);
-    setGifQuery("");
-    setGifResults([]);
-    setGifNextPos(null);
-    setGifError("");
-    setGifLoading(false);
-  }
-
-  function openGifPicker(postId: string) {
-    setMediaMenuPostId(null);
-    setAiMenuPostId(null);
-    setMoreMenuPostId(null);
-    setGifPickerPostId(postId);
-    setGifPickerOpen(true);
-    setGifQuery("");
-    setGifResults([]);
-    setGifNextPos(null);
-    setGifError("");
-  }
-
-  async function fetchTenorGifs(options: { query: string; append: boolean; pos?: string | null }) {
-    const requestId = ++gifRequestRef.current;
-    const query = options.query.trim();
-    const endpoint = query ? "search" : "trending";
-    const params = new URLSearchParams({
-      key: tenorApiKey,
-      limit: String(TENOR_PAGE_SIZE),
-      media_filter: "minimal",
-      contentfilter: "medium",
-      locale: locale === "zh" ? "zh_CN" : "en_US"
-    });
-    if (query) {
-      params.set("q", query);
-    }
-    if (options.pos) {
-      params.set("pos", options.pos);
-    }
-
-    setGifLoading(true);
-    setGifError("");
-
-    try {
-      const response = await fetch(`https://g.tenor.com/v1/${endpoint}?${params.toString()}`, {
-        method: "GET",
-        cache: "no-store"
-      });
-      if (!response.ok) {
-        throw new Error(`Tenor request failed: ${response.status}`);
-      }
-      const payload = (await response.json()) as TenorGifApiResponse;
-      if (requestId !== gifRequestRef.current) {
-        return;
-      }
-      const items = mapTenorResults(payload.results ?? []);
-      setGifResults((prev) => (options.append ? mergeTenorResults(prev, items) : items));
-      setGifNextPos(payload.next !== undefined && payload.next !== null ? String(payload.next) : null);
-    } catch (error) {
-      if (requestId !== gifRequestRef.current) {
-        return;
-      }
-      console.error(error);
-      setGifError(t("Unable to load GIFs. Check network or API key.", "GIF 加载失败，请检查网络或 Tenor Key。"));
-      if (!options.append) {
-        setGifResults([]);
-      }
-    } finally {
-      if (requestId === gifRequestRef.current) {
-        setGifLoading(false);
-      }
-    }
-  }
-
-  function insertGifToPost(postId: string, gif: TenorGifTile) {
-    const editor = editorRefs.current[postId];
-    if (editor) {
-      const existing = editor.querySelectorAll("img.tf-inline-img").length;
-      const mediaCount = currentDraft?.posts.find((p) => p.id === postId)?.media?.length ?? 0;
-      if (existing + mediaCount >= 4) {
-        closeGifPicker();
-        setNotice(t("Max 4 media per tweet.", "每条推文最多 4 个媒体文件。"));
-        return;
-      }
-      const id = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const imgTag = `<p>${buildInlineImgTag(gif.gifUrl, id, gif.title, "gif")}</p>`;
-      editor.insertAdjacentHTML("beforeend", imgTag);
-      const postText = normalizeRichHtml(editor.innerHTML);
-      updateCurrentDraft((draft) => ({
-        ...draft,
-        posts: draft.posts.map((post) =>
-          post.id === postId ? { ...post, text: postText } : post
-        )
-      }));
-    } else {
-      updateCurrentDraft((draft) => ({
-        ...draft,
-        posts: draft.posts.map((post) =>
-          post.id === postId
-            ? {
-                ...post,
-                media: [
-                  ...(post.media ?? []),
-                  { id: createId(), type: "gif", name: gif.title, url: gif.gifUrl }
-                ]
-              }
-            : post
-        )
-      }));
-    }
-    closeGifPicker();
-    setNotice(t("GIF added.", "已添加 GIF。"));
-  }
-
   function handleUploadChange(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     const postId = targetUploadPostId;
@@ -2247,7 +1449,7 @@ export function ComposeWorkbench() {
       return `Thread start: ${input}`;
     }
     if (preset === "emoji") {
-      return `${input} ✨`;
+      return `${input} ?`;
     }
     if (preset === "announcement") {
       return `Announcement:\n${input}`;
@@ -2533,379 +1735,34 @@ export function ComposeWorkbench() {
     return Array.isArray(payload?.tweets) ? payload.tweets : [];
   }
 
-  function queueCurrentDraft() {
-    if (!currentDraft) {
-      return;
-    }
-    if (!publishReady) {
-      setPublishState("blocked");
-      setNotice(t("One or more posts exceed the character limit.", "有内容超过字符限制。"));
-      return;
-    }
-    setPublishState("scheduling");
-    const prepared = prepareCurrentDraftForPublish();
-    const item = buildQueueItem(prepared, workspace.scheduleAt, {
-      sourceDraftId: currentDraft.id,
-      draftKind: currentDraft.kind
-    });
-    updateWorkspace((prev) => ({
-      ...prev,
-      queue: [item, ...prev.queue].sort(sortQueueAsc),
-      activity: appendActivityLogs(prev.activity, [
-        createActivityLog({
-          level: "info",
-          event: "queue_scheduled",
-          message:
-            locale === "zh"
-              ? `${draftKindLabel(currentDraft.kind, locale)}已排程到 ${formatDateTime(item.publishAt)}。`
-              : `${draftKindLabel(currentDraft.kind, locale)} scheduled for ${formatDateTime(item.publishAt)}.`,
-          queueItemId: item.id,
-          draftId: currentDraft.id
-        })
-      ])
-    }));
-    setPublishState("scheduled");
-    setNotice(
-      locale === "zh"
-        ? `已将${draftKindLabel(currentDraft.kind, locale)}加入排程。`
-        : `Added ${draftKindLabel(currentDraft.kind, locale)} to schedule.`
-    );
-  }
-
-  async function publishCurrentDraft() {
-    if (!currentDraft) {
-      return;
-    }
-    if (authStatus !== "authenticated") {
-      setPublishState("blocked");
-      setNotice(t("Sign in with X before publishing.", "发布前请先登录 X 账号。"));
-      return;
-    }
-    if (!publishReady) {
-      setPublishState("blocked");
-      setNotice(t("One or more posts exceed the character limit.", "有内容超过字符限制。"));
-      return;
-    }
-    setPublishState("publishing");
-    const prepared = prepareCurrentDraftForPublish();
-    const draftId = currentDraft.id;
-    const draftKind = currentDraft.kind;
-    let tweetIds: string[] = [];
-    try {
-      tweetIds = await publishPostsToX(prepared);
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : t("Publishing failed. Please try again.", "发布失败，请稍后重试。");
-      updateWorkspace((prev) => ({
-        ...prev,
-        activity: appendActivityLogs(prev.activity, [
-          createActivityLog({
-            level: "error",
-            event: "manual_publish_failed",
-            message:
-              locale === "zh" ? `手动发布失败：${message}` : `Manual publish failed: ${message}`,
-            draftId
-          })
-        ])
-      }));
-      setPublishState("blocked");
-      setNotice(message);
-      return;
-    }
-    const queueItem = buildQueueItem(prepared, new Date().toISOString(), {
-      sourceDraftId: draftId,
-      draftKind
-    });
-    const persistedPosts = await persistMediaUrls(queueItem.posts);
-    const published = publishQueueItem(
-      { ...queueItem, posts: persistedPosts },
-      { xTweetIds: tweetIds }
-    );
-    updateWorkspace((prev) => {
-      const nextDrafts = prev.drafts.length > 1
-        ? prev.drafts.filter((draft) => draft.id !== draftId)
-        : prev.drafts;
-      const nextSelectedId = nextDrafts.some((draft) => draft.id === prev.selectedDraftId)
-        ? prev.selectedDraftId
-        : nextDrafts[0].id;
-      return {
-        ...prev,
-        drafts: nextDrafts,
-        selectedDraftId: nextSelectedId,
-        published: [published, ...prev.published].sort(sortPublishedDesc),
-        activity: appendActivityLogs(prev.activity, [
-          createActivityLog({
-            level: "info",
-            event: "manual_publish",
-            message:
-              locale === "zh"
-                ? `${draftKindLabel(draftKind, locale)}已手动发布。`
-                : `${draftKindLabel(draftKind, locale)} published manually.`,
-            queueItemId: queueItem.id,
-            draftId
-          })
-        ])
-      };
-    });
-    setPaneTab("posted");
-    setPublishState("published");
-    setDraftHistory((prev) => {
-      if (!(draftId in prev)) return prev;
-      const next = { ...prev };
-      delete next[draftId];
-      return next;
-    });
-    setNotice(
-      locale === "zh" ? `${draftKindLabel(draftKind, locale)}已发布。` : `Published ${draftKindLabel(draftKind, locale)}.`
-    );
-  }
-
-  async function runDueJobs(options?: { silent?: boolean }) {
-    const now = Date.now();
-    const dueItems = workspace.queue
-      .filter((item) => {
-        const isPendingDue = item.status === "pending" && new Date(item.publishAt).getTime() <= now;
-        const isRetryDue =
-          item.status === "failed" &&
-          !!item.nextRetryAt &&
-          new Date(item.nextRetryAt).getTime() <= now &&
-          item.attemptCount < item.maxAttempts;
-        return isPendingDue || isRetryDue;
-      })
-      .sort(sortQueueAsc);
-
-    if (dueItems.length === 0) {
-      if (!options?.silent) {
-        setNotice(t("No due items right now.", "当前没有到期任务。"));
-      }
-      return;
-    }
-
-    if (authStatus !== "authenticated") {
-      if (!options?.silent) {
-        setNotice(t("Sign in with X before running queue.", "执行队列前请先登录 X 账号。"));
-      }
-      return;
-    }
-
-    let succeeded = 0;
-    let failed = 0;
-    const publishedItems: WorkspaceState["published"] = [];
-    const failedById = new Map<string, WorkspaceState["queue"][number]>();
-    const succeededIds = new Set<string>();
-    const activityLogs: WorkspaceState["activity"] = [];
-
-    for (const item of dueItems) {
-      const nowIso = new Date().toISOString();
-      const nextAttempt = item.attemptCount + 1;
-      const attemptedItem = {
-        ...item,
-        attemptCount: nextAttempt,
-        lastAttemptAt: nowIso,
-        updatedAt: nowIso
-      };
-
-      try {
-        const tweetIds = await publishPostsToX(item.posts);
-        succeeded += 1;
-        succeededIds.add(item.id);
-        const persistedItem = { ...attemptedItem, posts: await persistMediaUrls(attemptedItem.posts) };
-        publishedItems.push(
-          publishQueueItem(persistedItem, {
-            xTweetIds: tweetIds
-          })
-        );
-        activityLogs.push(
-          createActivityLog({
-            level: "info",
-            event: "queue_publish_succeeded",
-            message:
-              locale === "zh"
-                ? `已发布排程${draftKindLabel(item.draftKind ?? "thread", locale)}（${item.preview.slice(0, 36)}）。`
-                : `Published scheduled ${draftKindLabel(item.draftKind ?? "thread", locale).toLowerCase()} (${item.preview.slice(0, 36)}).`,
-            queueItemId: item.id,
-            draftId: item.sourceDraftId
-          })
-        );
-      } catch (error) {
-        failed += 1;
-        const errorMessage =
-          error instanceof Error
-            ? error.message
-            : t("Publishing failed. Please try again.", "发布失败，请稍后重试。");
-        const retriesRemaining = nextAttempt < item.maxAttempts;
-        const retryAt = retriesRemaining ? computeRetryTimeIso(nowIso, nextAttempt) : undefined;
-        failedById.set(item.id, {
-          ...attemptedItem,
-          status: "failed",
-          nextRetryAt: retryAt,
-          lastError: errorMessage
-        });
-        activityLogs.push(
-          createActivityLog({
-            level: retriesRemaining ? "warn" : "error",
-            event: retriesRemaining ? "queue_retry_scheduled" : "queue_retry_exhausted",
-            message: retriesRemaining
-              ? locale === "zh"
-                ? `发布失败，将在 ${formatDateTime(retryAt as string)} 重试。`
-                : `Publish failed, retry at ${formatDateTime(retryAt as string)}.`
-              : locale === "zh"
-                ? `发布失败，已达到最大重试次数。`
-                : `Publish failed after ${nextAttempt} attempts.`,
-            queueItemId: item.id,
-            draftId: item.sourceDraftId
-          })
-        );
-      }
-    }
-
-    updateWorkspace((prev) => ({
-      ...prev,
-      queue: prev.queue
-        .filter((item) => !succeededIds.has(item.id))
-        .map((item) => failedById.get(item.id) ?? item)
-        .sort(sortQueueAsc),
-      published: [...publishedItems, ...prev.published].sort(sortPublishedDesc),
-      activity: appendActivityLogs(prev.activity, activityLogs)
-    }));
-
-    if (!options?.silent) {
-      if (failed > 0) {
-        setNotice(
-          locale === "zh"
-            ? `队列执行：成功 ${succeeded}，失败 ${failed}。`
-            : `Queue run: ${succeeded} succeeded, ${failed} failed.`
-        );
-      } else {
-        setNotice(
-          locale === "zh" ? `已执行 ${succeeded} 个到期任务。` : `Executed ${succeeded} due items.`
-        );
-      }
-    }
-  }
-
-  async function publishScheduledItem(id: string) {
-    const target = workspace.queue.find((item) => item.id === id);
-    if (!target) {
-      return;
-    }
-
-    if (authStatus !== "authenticated") {
-      setPublishState("blocked");
-      setNotice(t("Sign in with X before publishing.", "发布前请先登录 X 账号。"));
-      return;
-    }
-
-    setPublishState("publishing");
-    const nowIso = new Date().toISOString();
-    const nextAttempt = target.attemptCount + 1;
-    const attemptedItem = {
-      ...target,
-      attemptCount: nextAttempt,
-      lastAttemptAt: nowIso,
-      updatedAt: nowIso
-    };
-
-    let tweetIds: string[] = [];
-    try {
-      tweetIds = await publishPostsToX(target.posts);
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : t("Publishing failed. Please try again.", "发布失败，请稍后重试。");
-      const retriesRemaining = nextAttempt < target.maxAttempts;
-      const retryAt = retriesRemaining ? computeRetryTimeIso(nowIso, nextAttempt) : undefined;
-
-      updateWorkspace((prev) => ({
-        ...prev,
-        queue: prev.queue
-          .map((item) =>
-            item.id === id
-              ? {
-                  ...attemptedItem,
-                  status: "failed" as const,
-                  nextRetryAt: retryAt,
-                  lastError: errorMessage
-                }
-              : item
-          )
-          .sort(sortQueueAsc),
-        activity: appendActivityLogs(prev.activity, [
-          createActivityLog({
-            level: retriesRemaining ? "warn" : "error",
-            event: retriesRemaining ? "queue_retry_scheduled" : "queue_retry_exhausted",
-            message: retriesRemaining
-              ? locale === "zh"
-                ? `发布失败，将在 ${formatDateTime(retryAt as string)} 重试。`
-                : `Publish failed, retry at ${formatDateTime(retryAt as string)}.`
-              : locale === "zh"
-                ? "发布失败，已达到最大重试次数。"
-                : `Publish failed after ${nextAttempt} attempts.`,
-            queueItemId: target.id,
-            draftId: target.sourceDraftId
-          })
-        ])
-      }));
-      setPublishState("blocked");
-      setNotice(errorMessage);
-      return;
-    }
-
-    const persistedScheduled = { ...attemptedItem, posts: await persistMediaUrls(attemptedItem.posts) };
-    updateWorkspace((prev) => ({
-      ...prev,
-      queue: prev.queue.filter((item) => item.id !== id),
-      published: [
-        publishQueueItem(persistedScheduled, {
-          xTweetIds: tweetIds
-        }),
-        ...prev.published
-      ].sort(sortPublishedDesc),
-      activity: appendActivityLogs(prev.activity, [
-        createActivityLog({
-          level: "info",
-          event: "manual_publish_from_queue",
-          message:
-            locale === "zh"
-              ? `已手动发布排程内容（${target.preview.slice(0, 36)}）。`
-              : `Scheduled item published manually (${target.preview.slice(0, 36)}).`,
-          queueItemId: target.id,
-          draftId: target.sourceDraftId
-        })
-      ])
-    }));
-    setPaneTab("posted");
-    setPublishState("published");
-    setNotice(t("Scheduled item published.", "已发布排程内容。"));
-  }
-
-  function retryScheduledItem(id: string) {
-    const target = workspace.queue.find((item) => item.id === id);
-    if (!target) {
-      return;
-    }
-    const retried = retryQueueItem(target);
-    updateWorkspace((prev) => ({
-      ...prev,
-      queue: prev.queue.map((item) => (item.id === id ? retried : item)).sort(sortQueueAsc),
-      activity: appendActivityLogs(prev.activity, [
-        createActivityLog({
-          level: "info",
-          event: "manual_retry",
-          message:
-            locale === "zh"
-              ? `已请求手动重试（${target.preview.slice(0, 36)}）。`
-              : `Manual retry requested (${target.preview.slice(0, 36)}).`,
-          queueItemId: target.id,
-          draftId: target.sourceDraftId
-        })
-      ])
-    }));
-    setNotice(t("Retry queued. It will run on the next scheduler tick.", "已加入重试队列，将在下一次调度执行。"));
-  }
+  const {
+    publishState,
+    publishBusy,
+    scheduleLabel,
+    publishLabel,
+    queueCurrentDraft,
+    publishCurrentDraft,
+    runDueJobs,
+    publishScheduledItem,
+    retryScheduledItem,
+    retryFailedItems
+  } = useQueueRunner({
+    hydrated,
+    authStatus,
+    locale,
+    t,
+    currentDraft,
+    publishReady,
+    queue: workspace.queue,
+    scheduleAt: workspace.scheduleAt,
+    updateWorkspace,
+    prepareCurrentDraftForPublish,
+    publishPostsToX,
+    persistMediaUrls,
+    setNotice,
+    setPaneTab,
+    setDraftHistory
+  });
 
   async function copyText(text: string, message: string) {
     const payload = text.trimEnd();
@@ -3014,10 +1871,6 @@ export function ComposeWorkbench() {
     setSidebarCollapsed((prev) => !prev);
   }
 
-  function toggleCommandPalette() {
-    setCommandOpen((prev) => !prev);
-  }
-
   async function handleAuthAction() {
     if (authorIdentity.signedIn) {
       await signOut({ callbackUrl: "/" });
@@ -3096,34 +1949,7 @@ export function ComposeWorkbench() {
       label: t("Retry Failed Items", "重试失败任务"),
       hint: "R F",
       keywords: locale === "zh" ? "队列 重试 失败" : "queue retry failed",
-      run: () => {
-        const failedItems = workspace.queue.filter((item) => item.status === "failed");
-        if (failedItems.length === 0) {
-          setNotice(t("No failed items to retry.", "没有可重试的失败任务。"));
-          return;
-        }
-        updateWorkspace((prev) => ({
-          ...prev,
-          queue: prev.queue
-            .map((item) => (item.status === "failed" ? retryQueueItem(item) : item))
-            .sort(sortQueueAsc),
-          activity: appendActivityLogs(prev.activity, [
-            createActivityLog({
-              level: "info",
-              event: "bulk_retry",
-              message:
-                locale === "zh"
-                  ? `已为 ${failedItems.length} 个失败任务发起手动重试。`
-                  : `Manual retry for ${failedItems.length} failed item(s).`
-            })
-          ])
-        }));
-        setNotice(
-          locale === "zh"
-            ? `已加入 ${failedItems.length} 个重试任务。`
-            : `Retry queued for ${failedItems.length} items.`
-        );
-      }
+      run: retryFailedItems
     },
     {
       id: "open_templates",
@@ -3176,31 +2002,51 @@ export function ComposeWorkbench() {
     }
   ];
 
-  const normalizedCommandQuery = commandQuery.trim().toLowerCase();
-  const filteredCommands = quickCommands.filter((item) =>
-    `${item.label} ${item.keywords}`.toLowerCase().includes(normalizedCommandQuery)
-  );
+  const {
+    commandOpen,
+    commandQuery,
+    setCommandQuery,
+    commandRef,
+    filteredCommands,
+    openCommandPalette,
+    closeCommandPalette,
+    toggleCommandPalette,
+    runQuickCommand
+  } = useCommandPalette({
+    quickCommands,
+    sidebarCollapsed
+  });
 
-  function runQuickCommand(command: QuickCommand) {
-    void Promise.resolve(command.run()).finally(() => {
-      setCommandOpen(false);
-      setCommandQuery("");
-    });
-  }
-
-  const publishBusy = publishState === "scheduling" || publishState === "publishing";
-  const scheduleLabel =
-    publishState === "scheduling"
-      ? t("Scheduling...", "排程中...")
-      : publishState === "scheduled"
-        ? t("Scheduled", "已排程")
-        : t("Schedule", "排程");
-  const publishLabel =
-    publishState === "publishing"
-      ? t("Publishing...", "发布中...")
-      : publishState === "published"
-        ? t("Published", "已发布")
-        : t("Publish", "发布");
+  useGlobalShortcuts({
+    locale,
+    t,
+    paneTab,
+    activeView: workspace.activeView,
+    currentDraft,
+    currentPost,
+    drafts: workspace.drafts,
+    selectedDraftId: workspace.selectedDraftId,
+    addDraftSnapshot,
+    setNotice,
+    openCommandPalette: () => openCommandPalette(),
+    closeCommandPalette: () => closeCommandPalette(true),
+    toggleSidebar,
+    togglePreviewView,
+    publishCurrentDraft,
+    queueCurrentDraft,
+    insertPostBelow,
+    movePostDown,
+    openUploadForPost,
+    setMediaMenuPostId,
+    setAiMenuPostId,
+    setMoreMenuPostId,
+    setDraftPickerOpen,
+    setTemplateLibraryOpen,
+    setHistoryOpen,
+    setShortcutsOpen,
+    closeGifPicker,
+    setSelectionToolbar
+  });
 
   return (
     <div
@@ -3275,8 +2121,7 @@ export function ComposeWorkbench() {
                   onClick={() => {
                     openComposeView("drafts");
                     setDraftPickerOpen(false);
-                    setCommandQuery("new");
-                    setCommandOpen(true);
+                    openCommandPalette("new");
                   }}
                   aria-label={t("Create draft command", "新建草稿命令")}
                 >
@@ -5363,405 +4208,3 @@ export function ComposeWorkbench() {
   );
 }
 
-function extractArticleHeading(html: string): { title: string; subtitle: string } {
-  const parsed = splitArticleBlocks(html);
-  return {
-    title: parsed.title,
-    subtitle: parsed.subtitle
-  };
-}
-
-function splitArticleBlocks(html: string): {
-  title: string;
-  subtitle: string;
-  bodyHtml: string;
-} {
-  if (typeof window === "undefined") {
-    return {
-      title: "",
-      subtitle: "",
-      bodyHtml: normalizeRichHtml(html)
-    };
-  }
-
-  const container = window.document.createElement("div");
-  container.innerHTML = normalizeRichHtml(html);
-
-  let title = "";
-  let subtitle = "";
-
-  const firstH1 = container.querySelector("h1");
-  if (firstH1) {
-    title = (firstH1.textContent ?? "").trim();
-    firstH1.remove();
-  }
-
-  const firstH2 = container.querySelector("h2");
-  if (firstH2) {
-    subtitle = (firstH2.textContent ?? "").trim();
-    firstH2.remove();
-  }
-
-  let bodyHtml = container.innerHTML.trim();
-  if (!bodyHtml) {
-    bodyHtml = "<p><br></p>";
-  }
-
-  return {
-    title,
-    subtitle,
-    bodyHtml
-  };
-}
-
-function buildArticleHtml(title: string, subtitle: string, bodyHtml: string): string {
-  const parts: string[] = [];
-  const normalizedBody = bodyHtml.trim() || "<p><br></p>";
-
-  if (title.trim()) {
-    parts.push(`<h1>${escapeHtml(title.trim())}</h1>`);
-  }
-  if (subtitle.trim()) {
-    parts.push(`<h2>${escapeHtml(subtitle.trim())}</h2>`);
-  }
-  parts.push(normalizedBody);
-
-  return normalizeRichHtml(parts.join(""));
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function clonePosts(posts: WorkspaceState["drafts"][number]["posts"]) {
-  return posts.map((post) => ({
-    id: post.id,
-    text: post.text,
-    media: (post.media ?? []).map((item) => ({
-      id: item.id,
-      type: item.type,
-      name: item.name,
-      url: item.url
-    })),
-    poll: post.poll
-      ? {
-          question: post.poll.question,
-          options: [...post.poll.options]
-        }
-      : undefined
-  }));
-}
-
-function serializeDraftSignature(draft: WorkspaceState["drafts"][number]): string {
-  return JSON.stringify({
-    kind: draft.kind,
-    title: draft.title,
-    topic: draft.topic ?? "",
-    posts: draft.posts.map((post) => ({
-      text: post.text,
-      media: (post.media ?? []).map((item) => ({
-        type: item.type,
-        name: item.name
-      })),
-      poll: post.poll ?? null
-    }))
-  });
-}
-
-function nextManualSnapshotLabel(list: DraftSnapshot[]): string {
-  const maxIndex = list.reduce((max, item) => {
-    const matched = item.label.match(/^手动保存(\d+)$/);
-    if (!matched) {
-      return max;
-    }
-    const value = Number(matched[1]);
-    return Number.isFinite(value) ? Math.max(max, value) : max;
-  }, 0);
-  return `手动保存${maxIndex + 1}`;
-}
-
-function formatSnapshotTimestamp(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return iso;
-  }
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  const h = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
-  const s = String(date.getSeconds()).padStart(2, "0");
-  return `${y}-${m}-${d} ${h}:${min}:${s}`;
-}
-
-function isTimestampSnapshotLabel(label: string): boolean {
-  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(label);
-}
-
-function kindIcon(kind: DraftKind): string {
-  if (kind === "tweet") {
-    return "T";
-  }
-  if (kind === "article") {
-    return "A";
-  }
-  return "H";
-}
-
-function formatRelativeTime(value: string, locale: UiLocale): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "--";
-  }
-  const diffMs = Date.now() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) {
-    return locale === "zh" ? "刚刚" : "just now";
-  }
-  if (diffMin < 60) {
-    return locale === "zh" ? `${diffMin} 分钟前` : `${diffMin}m ago`;
-  }
-  const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) {
-    return locale === "zh" ? `${diffHour} 小时前` : `${diffHour}h ago`;
-  }
-  const diffDay = Math.floor(diffHour / 24);
-  return locale === "zh" ? `${diffDay} 天前` : `${diffDay}d ago`;
-}
-
-function formatSavedClock(value: string, locale: UiLocale): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mm = String(date.getMinutes()).padStart(2, "0");
-  const ss = String(date.getSeconds()).padStart(2, "0");
-  return locale === "zh" ? `${hh}:${mm}:${ss}` : `${hh}:${mm}:${ss}`;
-}
-
-type AuthorIdentity = {
-  signedIn: boolean;
-  name: string;
-  username: string;
-  handle: string;
-  image: string | null;
-  initial: string;
-};
-
-function resolveAuthorIdentity(session: Session | null | undefined): AuthorIdentity {
-  const fallbackName = "xuegao";
-  const fallbackUsername = "0xuegao";
-  const name = cleanDisplayName(session?.user?.name) ?? fallbackName;
-  const username =
-    normalizeUsername(session?.user?.username) ?? normalizeUsername(name) ?? fallbackUsername;
-  const handle = `@${username}`;
-  const image = session?.user?.image?.trim() || null;
-  return {
-    signedIn: !!session?.user,
-    name,
-    username,
-    handle,
-    image,
-    initial: takeInitial(name)
-  };
-}
-
-function cleanDisplayName(value: string | null | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function normalizeUsername(value: string | null | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-  const normalized = value
-    .trim()
-    .replace(/^@+/, "")
-    .replace(/[^A-Za-z0-9_]/g, "");
-  return normalized.length > 0 ? normalized : null;
-}
-
-function takeInitial(value: string): string {
-  const head = value.trim().charAt(0);
-  return head ? head.toLowerCase() : "x";
-}
-
-function formatCompactPreviewNumber(value: number): string {
-  if (!Number.isFinite(value)) {
-    return "0";
-  }
-  return new Intl.NumberFormat("en-US", {
-    notation: "compact",
-    maximumFractionDigits: 1
-  }).format(Math.max(0, value));
-}
-
-function snapshotPreviewText(snapshot: DraftSnapshot, locale: UiLocale): string {
-  const firstText =
-    snapshot.posts
-      .map((post) => toLintText(post.text).replace(/\s+/g, " ").trim())
-      .find((value) => value.length > 0) ?? "";
-  if (!firstText) {
-    return locale === "zh" ? "空内容" : "Empty content";
-  }
-  const limit = snapshot.kind === "article" ? 120 : 92;
-  if (firstText.length <= limit) {
-    return firstText;
-  }
-  return `${firstText.slice(0, limit).trimEnd()}...`;
-}
-
-function RichEditor({
-  value,
-  variant,
-  locale,
-  onChange,
-  onFocus,
-  bindRef
-}: {
-  value: string;
-  variant: DraftKind;
-  locale: UiLocale;
-  onChange: (next: string) => void;
-  onFocus: () => void;
-  bindRef: (el: HTMLDivElement | null) => void;
-}) {
-  const internalRef = useRef<HTMLDivElement | null>(null);
-  const dragImgRef = useRef<HTMLImageElement | null>(null);
-  const editorAriaLabel =
-    variant === "article"
-      ? locale === "zh"
-        ? "文章编辑器"
-        : "Article editor"
-      : variant === "tweet"
-        ? locale === "zh"
-          ? "推文编辑器"
-          : "Tweet editor"
-        : locale === "zh"
-          ? "线程条目编辑器"
-          : "Thread post editor";
-
-  useEffect(() => {
-    if (!internalRef.current) {
-      return;
-    }
-    const normalized = normalizeRichHtml(value);
-    if (internalRef.current.innerHTML !== normalized) {
-      internalRef.current.innerHTML = normalized;
-    }
-  }, [value]);
-
-  return (
-    <div
-      ref={(element) => {
-        internalRef.current = element;
-        bindRef(element);
-      }}
-      className={clsx("tf-rich-editor", `tf-rich-${variant}`)}
-      contentEditable
-      role="textbox"
-      aria-multiline="true"
-      aria-label={editorAriaLabel}
-      tabIndex={0}
-      suppressContentEditableWarning
-      data-placeholder={locale === "zh" ? "开始写作..." : "Write your draft..."}
-      onFocus={onFocus}
-      onInput={(event) => onChange(normalizeRichHtml(event.currentTarget.innerHTML))}
-      onBlur={(event) => onChange(normalizeRichHtml(event.currentTarget.innerHTML))}
-      onDragStart={(event) => {
-        const target = event.target as HTMLElement;
-        if (target.tagName === "IMG" && target.classList.contains("tf-inline-img")) {
-          dragImgRef.current = target as HTMLImageElement;
-          event.dataTransfer.effectAllowed = "move";
-          event.dataTransfer.setData("text/x-inline-img", "1");
-        }
-      }}
-      onDragOver={(event) => {
-        event.preventDefault();
-        if (event.dataTransfer.types.includes("text/x-inline-img")) {
-          event.dataTransfer.dropEffect = "move";
-        } else {
-          event.dataTransfer.dropEffect = event.dataTransfer.types.includes("Files") ? "copy" : "move";
-        }
-      }}
-      onDragEnd={() => { dragImgRef.current = null; }}
-      onDrop={(event) => {
-        const editor = internalRef.current;
-        if (!editor) return;
-
-        /* ── Internal image reorder ── */
-        if (dragImgRef.current && event.dataTransfer.types.includes("text/x-inline-img")) {
-          event.preventDefault();
-          const img = dragImgRef.current;
-          dragImgRef.current = null;
-          const imgWrapper = img.closest("p") ?? img;
-          const dropY = event.clientY;
-          let insertBefore: Node | null = null;
-          for (const child of Array.from(editor.childNodes)) {
-            const rect = (child as HTMLElement).getBoundingClientRect?.();
-            if (rect && dropY < rect.top + rect.height / 2) {
-              insertBefore = child;
-              break;
-            }
-          }
-          if (insertBefore && insertBefore !== imgWrapper && insertBefore !== imgWrapper.nextSibling) {
-            editor.insertBefore(imgWrapper, insertBefore);
-          } else if (!insertBefore && imgWrapper !== editor.lastChild) {
-            editor.appendChild(imgWrapper);
-          }
-          onChange(normalizeRichHtml(editor.innerHTML));
-          return;
-        }
-
-        /* ── External file drop ── */
-        const files = Array.from(event.dataTransfer.files).filter(
-          (f) => f.type.startsWith("image/") || f.type.startsWith("video/")
-        );
-        if (files.length > 0) {
-          event.preventDefault();
-          const existing = editor.querySelectorAll("img.tf-inline-img").length;
-          const remaining = Math.max(0, 4 - existing);
-          const accepted = files.slice(0, remaining);
-          if (accepted.length === 0) return;
-          let insertHtml = "";
-          for (const file of accepted) {
-            const url = URL.createObjectURL(file);
-            const id = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const type = file.type.startsWith("video/") ? "video" : file.type === "image/gif" ? "gif" : "image";
-            insertHtml += `<p>${buildInlineImgTag(url, id, file.name, type)}</p>`;
-          }
-          const dropY = event.clientY;
-          let target: Node | null = null;
-          for (const child of Array.from(editor.childNodes)) {
-            const rect = (child as HTMLElement).getBoundingClientRect?.();
-            if (rect && dropY < rect.top + rect.height / 2) {
-              target = child;
-              break;
-            }
-          }
-          const temp = document.createElement("div");
-          temp.innerHTML = insertHtml;
-          const frag = document.createDocumentFragment();
-          while (temp.firstChild) frag.appendChild(temp.firstChild);
-          if (target) {
-            editor.insertBefore(frag, target);
-          } else {
-            editor.appendChild(frag);
-          }
-          onChange(normalizeRichHtml(editor.innerHTML));
-          return;
-        }
-      }}
-    />
-  );
-}
